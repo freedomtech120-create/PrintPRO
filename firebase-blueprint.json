@@ -1,0 +1,140 @@
+{
+  "entities": {
+    "Tenant": {
+      "title": "Tenant",
+      "description": "Represents a business owner/tenant using the platform.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "isAdmin": { "type": "boolean" },
+        "trialExpiresAt": { "type": "string", "format": "date-time" },
+        "subscriptionExpiresAt": { "type": "string", "format": "date-time" },
+        "isApproved": { "type": "boolean" },
+        "subscriptionStatus": { "type": "string" },
+        "lastPaymentRef": { "type": "string" },
+        "planType": { "type": "string" }
+      },
+      "required": ["email", "name", "createdAt", "trialExpiresAt", "isApproved", "subscriptionStatus"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Represents a printing order/job.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string" },
+        "invoiceNumber": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "items": { "type": "array" },
+        "totalAmount": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "status": { "type": "string" },
+        "paymentStatus": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" }
+      }
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "Represents a business expense.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string" },
+        "description": { "type": "string" },
+        "amount": { "type": "number" },
+        "category": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" }
+      }
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Represents a customer.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" }
+      }
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Represents a printing product or service.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string" },
+        "name": { "type": "string" },
+        "pricePerSqFt": { "type": "number" },
+        "category": { "type": "string" }
+      }
+    },
+    "BusinessSettings": {
+      "title": "Business Settings",
+      "description": "Settings for the printing business.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string" },
+        "name": { "type": "string" },
+        "address": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "website": { "type": "string" },
+        "invoicePrefix": { "type": "string" },
+        "nextInvoiceNumber": { "type": "number" },
+        "currencyCode": { "type": "string" },
+        "currencySymbol": { "type": "string" },
+        "smsProvider": { "type": "string" },
+        "smsApiKey": { "type": "string" },
+        "smsSenderId": { "type": "string" }
+      }
+    },
+    "PlatformSettings": {
+      "title": "Platform Settings",
+      "description": "Global settings for the platform admin.",
+      "type": "object",
+      "properties": {
+        "prices": { "type": "object" },
+        "currencyCode": { "type": "string" },
+        "currencySymbol": { "type": "string" },
+        "paystackPublicKey": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/platform/settings": {
+      "schema": "PlatformSettings",
+      "description": "Global platform settings"
+    },
+    "/tenants/{tenantId}": {
+      "schema": "Tenant",
+      "description": "Global tenant profile"
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Orders, filtered by tenantId field"
+    },
+    "/expenses/{expenseId}": {
+      "schema": "Expense",
+      "description": "Expenses, filtered by tenantId field"
+    },
+    "/customers/{customerId}": {
+      "schema": "Customer",
+      "description": "Customers, filtered by tenantId field"
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Products, filtered by tenantId field"
+    },
+    "/settings/{tenantId}": {
+      "schema": "BusinessSettings",
+      "description": "Tenant-specific settings"
+    }
+  }
+}
