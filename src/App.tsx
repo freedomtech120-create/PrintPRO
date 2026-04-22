@@ -156,6 +156,12 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [viewingTenantId, setViewingTenantId] = useState<string | null>(null);
 
+  // Orders Search & Filter State
+  const [orderSearchTerm, setOrderSearchTerm] = useState('');
+  const [orderStatusFilter, setOrderStatusFilter] = useState('all');
+  const [orderDateFrom, setOrderDateFrom] = useState('');
+  const [orderDateTo, setOrderDateTo] = useState('');
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
       if (u) {
@@ -1803,6 +1809,42 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
   const receiptRef = useRef<HTMLDivElement>(null);
 
+  // Search & Filter State
+  const [orderSearchTerm, setOrderSearchTerm] = useState('');
+  const [orderStatusFilter, setOrderStatusFilter] = useState('all');
+  const [orderDateFrom, setOrderDateFrom] = useState('');
+  const [orderDateTo, setOrderDateTo] = useState('');
+
+  // Filtering Logic
+  const filteredOrders = orders.filter(order => {
+    // Search term (customer name or invoice number)
+    const searchMatch = !orderSearchTerm || 
+      order.customerName.toLowerCase().includes(orderSearchTerm.toLowerCase()) ||
+      (order.invoiceNumber && order.invoiceNumber.toLowerCase().includes(orderSearchTerm.toLowerCase())) ||
+      order.id?.toLowerCase().includes(orderSearchTerm.toLowerCase());
+
+    // Status filter
+    const statusMatch = orderStatusFilter === 'all' || order.status === orderStatusFilter;
+
+    // Date range filter
+    const createdAt = order.createdAt instanceof Timestamp ? order.createdAt.toDate() : 
+                     (order.createdAt?.toDate ? order.createdAt.toDate() : new Date(order.createdAt));
+    
+    let dateMatch = true;
+    if (orderDateFrom) {
+      const fromDate = new Date(orderDateFrom);
+      fromDate.setHours(0, 0, 0, 0);
+      dateMatch = dateMatch && createdAt >= fromDate;
+    }
+    if (orderDateTo) {
+      const toDate = new Date(orderDateTo);
+      toDate.setHours(23, 59, 59, 999);
+      dateMatch = dateMatch && createdAt <= toDate;
+    }
+
+    return searchMatch && statusMatch && dateMatch;
+  });
+
   // New Order Form State
   const [pricingMode, setPricingMode] = useState<'standard' | 'area'>('standard');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -1914,6 +1956,14 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
     }
   };
 
+  const updatePaymentStatus = async (orderId: string, paymentStatus: PaymentStatus) => {
+    try {
+      await updateDoc(doc(db, 'orders', orderId), { paymentStatus, updatedAt: serverTimestamp() });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `orders/${orderId}`);
+    }
+  };
+
   const generateOrderMessage = (order: Order) => {
     const date = order.createdAt instanceof Timestamp ? order.createdAt.toDate() : new Date(order.createdAt);
     let message = `Invoice for ${order.customerName}\nInvoice: ${order.invoiceNumber || '#' + order.id?.slice(-8).toUpperCase()}\nDate: ${format(date, 'MMM d, yyyy')}\n\n`;
@@ -1978,19 +2028,27 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="relative w-full max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <Input placeholder="Search orders..." className="pl-10 bg-white border-slate-200" />
-        </div>
-        <Dialog open={isNewOrderOpen} onOpenChange={setIsNewOrderOpen}>
-          <DialogTrigger render={
-            <Button className="bg-blue-600 hover:bg-blue-700">
-              <Plus className="w-4 h-4 mr-2" />
-              New Order
-            </Button>
-          } />
-          <DialogContent className="sm:max-w-lg">
+      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-4">
+        <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
+          <div className="relative flex-1 w-full max-w-xl">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <Input 
+              id="order-search-input"
+              placeholder="Search by customer name or invoice #..." 
+              value={orderSearchTerm}
+              onChange={(e) => setOrderSearchTerm(e.target.value)}
+              className="pl-10 bg-slate-50/50 border-slate-200" 
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+            <Dialog open={isNewOrderOpen} onOpenChange={setIsNewOrderOpen}>
+              <DialogTrigger render={
+                <Button className="bg-blue-600 hover:bg-blue-700 h-10 px-6 font-bold shadow-lg shadow-blue-200 flex-1 lg:flex-none">
+                  <Plus className="w-4 h-4 mr-2" />
+                  New Order
+                </Button>
+              } />
+              <DialogContent className="sm:max-w-lg">
             <form onSubmit={handleAddOrder}>
               <DialogHeader>
                 <DialogTitle>Create New Order</DialogTitle>
@@ -2130,6 +2188,53 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
             </form>
           </DialogContent>
         </Dialog>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid gap-2">
+          <Label htmlFor="order-status-filter" className="text-xs font-bold text-slate-500 uppercase tracking-wider">Status Filter</Label>
+          <Select value={orderStatusFilter} onValueChange={setOrderStatusFilter}>
+            <SelectTrigger id="order-status-filter" className="bg-white border-slate-200">
+              <SelectValue placeholder="All Statuses" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Statuses</SelectItem>
+              <SelectItem value="pending">Pending</SelectItem>
+              <SelectItem value="processing">Processing</SelectItem>
+              <SelectItem value="completed">Completed</SelectItem>
+              <SelectItem value="delivered">Delivered</SelectItem>
+              <SelectItem value="cancelled">Cancelled</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="order-date-from" className="text-xs font-bold text-slate-500 uppercase tracking-wider">Date From</Label>
+          <div className="relative">
+            <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <Input 
+              id="order-date-from"
+              type="date" 
+              value={orderDateFrom} 
+              onChange={(e) => setOrderDateFrom(e.target.value)}
+              className="pl-10 bg-white border-slate-200" 
+            />
+          </div>
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="order-date-to" className="text-xs font-bold text-slate-500 uppercase tracking-wider">Date To</Label>
+          <div className="relative">
+            <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <Input 
+              id="order-date-to"
+              type="date" 
+              value={orderDateTo} 
+              onChange={(e) => setOrderDateTo(e.target.value)}
+              className="pl-10 bg-white border-slate-200" 
+            />
+          </div>
+        </div>
       </div>
 
       <Card className="shadow-sm border-slate-200">
@@ -2147,7 +2252,29 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
               </TableRow>
             </TableHeader>
             <TableBody>
-              {orders.map((order) => (
+              {filteredOrders.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="h-32 text-center text-slate-500">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <Search className="w-8 h-8 text-slate-300" />
+                      <p>No orders found matching your filters.</p>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={() => {
+                          setOrderSearchTerm('');
+                          setOrderStatusFilter('all');
+                          setOrderDateFrom('');
+                          setOrderDateTo('');
+                        }}
+                        className="text-blue-600 font-bold"
+                      >
+                        Reset All Filters
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : filteredOrders.map((order) => (
                 <TableRow key={order.id} className="hover:bg-slate-50/50 transition-colors">
                   <TableCell className="font-mono text-xs text-slate-500 font-bold">
                     {order.invoiceNumber || `#${order.id?.slice(-6).toUpperCase()}`}
@@ -2174,13 +2301,25 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
                     </Select>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="secondary" className={cn(
-                      "font-medium",
-                      order.paymentStatus === 'paid' ? "bg-green-100 text-green-700" : 
-                      order.paymentStatus === 'partial' ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"
-                    )}>
-                      {order.paymentStatus}
-                    </Badge>
+                    <Select 
+                      defaultValue={order.paymentStatus} 
+                      onValueChange={(v) => updatePaymentStatus(order.id!, v as PaymentStatus)}
+                    >
+                      <SelectTrigger className="w-[100px] h-8 border-none bg-transparent p-0 focus:ring-0">
+                        <Badge variant="secondary" className={cn(
+                          "font-medium w-full justify-center capitalize",
+                          order.paymentStatus === 'paid' ? "bg-green-100 text-green-700 hover:bg-green-100" : 
+                          order.paymentStatus === 'partial' ? "bg-amber-100 text-amber-700 hover:bg-amber-100" : "bg-red-100 text-red-700 hover:bg-red-100"
+                        )}>
+                          {order.paymentStatus}
+                        </Badge>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="paid">Paid</SelectItem>
+                        <SelectItem value="partial">Partial</SelectItem>
+                        <SelectItem value="unpaid">Unpaid</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </TableCell>
                   <TableCell className="font-semibold">{settings?.currencySymbol || 'GH₵'}{order.totalAmount.toLocaleString()}</TableCell>
                   <TableCell className="text-slate-500">
@@ -2225,10 +2364,15 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
             {selectedOrder && (
               <div className="space-y-8">
                 <div className="flex justify-between items-start">
-                  <div>
-                    <h1 className="text-3xl font-bold text-slate-900">{settings?.name || 'PrintPro Manager'}</h1>
-                    <p className="text-slate-500 text-sm whitespace-pre-line">{settings?.address}</p>
-                    <p className="text-slate-500 text-sm">{settings?.phone}</p>
+                  <div className="flex gap-4">
+                    {settings?.logoUrl && (
+                      <img src={settings.logoUrl} alt="Logo" className="w-16 h-16 object-contain rounded-lg border border-slate-100 p-1" referrerPolicy="no-referrer" />
+                    )}
+                    <div>
+                      <h1 className="text-3xl font-bold text-slate-900">{settings?.name || 'PrintPro Manager'}</h1>
+                      <p className="text-slate-500 text-sm whitespace-pre-line">{settings?.address}</p>
+                      <p className="text-slate-500 text-sm">{settings?.phone}</p>
+                    </div>
                   </div>
                   <div className="text-right">
                     <h2 className="text-xl font-bold text-blue-600">INVOICE</h2>
@@ -2736,6 +2880,7 @@ function SettingsView({ settings, user }: { settings: BusinessSettings | null, u
       smsProvider: formData.get('smsProvider') as 'arkasel' | 'mnotify',
       smsApiKey: formData.get('smsApiKey') as string,
       smsSenderId: formData.get('smsSenderId') as string,
+      logoUrl: formData.get('logoUrl') as string,
     };
 
     try {
@@ -2776,6 +2921,11 @@ function SettingsView({ settings, user }: { settings: BusinessSettings | null, u
               <div className="grid gap-2">
                 <Label htmlFor="website">Website</Label>
                 <Input id="website" name="website" defaultValue={settings?.website} placeholder="www.printshop.com" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="logoUrl">Business Logo URL</Label>
+                <Input id="logoUrl" name="logoUrl" defaultValue={settings?.logoUrl} placeholder="https://example.com/logo.png" />
+                <p className="text-[10px] text-slate-400 font-medium">Link to your business logo image (square or horizontal recommended).</p>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="grid gap-2">

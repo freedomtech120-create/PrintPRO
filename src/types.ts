@@ -96,4 +96,5 @@ export interface BusinessSettings {
   smsProvider?: 'arkasel' | 'mnotify';
   smsApiKey?: string;
   smsSenderId?: string;
+  logoUrl?: string;
 }
