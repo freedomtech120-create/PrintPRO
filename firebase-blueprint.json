@@ -2,10 +2,9 @@
   "entities": {
     "Tenant": {
       "title": "Tenant",
-      "description": "Represents a business owner/tenant using the platform.",
+      "description": "Represents a business using the platform.",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
         "email": { "type": "string" },
         "name": { "type": "string" },
         "photoURL": { "type": "string" },
@@ -14,15 +13,15 @@
         "trialExpiresAt": { "type": "string", "format": "date-time" },
         "subscriptionExpiresAt": { "type": "string", "format": "date-time" },
         "isApproved": { "type": "boolean" },
-        "subscriptionStatus": { "type": "string" },
+        "subscriptionStatus": { "type": "string", "enum": ["trial", "active", "expired", "pending_approval"] },
         "lastPaymentRef": { "type": "string" },
-        "planType": { "type": "string" }
+        "planType": { "type": "string", "enum": ["3m", "6m", "1y"] }
       },
-      "required": ["email", "name", "createdAt", "trialExpiresAt", "isApproved", "subscriptionStatus"]
+      "required": ["email", "name", "createdAt", "isApproved", "subscriptionStatus"]
     },
     "Order": {
       "title": "Order",
-      "description": "Represents a printing order/job.",
+      "description": "Represents an customer order.",
       "type": "object",
       "properties": {
         "tenantId": { "type": "string" },
@@ -32,16 +31,42 @@
         "items": { "type": "array" },
         "totalAmount": { "type": "number" },
         "paidAmount": { "type": "number" },
-        "status": { "type": "string" },
-        "paymentStatus": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "processing", "completed", "delivered", "cancelled"] },
+        "paymentStatus": { "type": "string", "enum": ["unpaid", "partial", "paid"] },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" },
         "createdBy": { "type": "string" }
-      }
+      },
+      "required": ["tenantId", "customerId", "customerName", "items", "totalAmount", "paidAmount", "status", "paymentStatus", "createdAt", "updatedAt", "createdBy"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Information about a business customer.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" }
+      },
+      "required": ["tenantId", "name"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Represents a service or product offered by the business.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string" },
+        "name": { "type": "string" },
+        "pricePerSqFt": { "type": "number" },
+        "category": { "type": "string" }
+      },
+      "required": ["tenantId", "name", "pricePerSqFt"]
     },
     "Expense": {
       "title": "Expense",
-      "description": "Represents a business expense.",
+      "description": "Track business spending.",
       "type": "object",
       "properties": {
         "tenantId": { "type": "string" },
@@ -50,34 +75,12 @@
         "category": { "type": "string" },
         "date": { "type": "string", "format": "date-time" },
         "createdBy": { "type": "string" }
-      }
-    },
-    "Customer": {
-      "title": "Customer",
-      "description": "Represents a customer.",
-      "type": "object",
-      "properties": {
-        "tenantId": { "type": "string" },
-        "name": { "type": "string" },
-        "email": { "type": "string" },
-        "phone": { "type": "string" },
-        "address": { "type": "string" }
-      }
-    },
-    "Product": {
-      "title": "Product",
-      "description": "Represents a printing product or service.",
-      "type": "object",
-      "properties": {
-        "tenantId": { "type": "string" },
-        "name": { "type": "string" },
-        "pricePerSqFt": { "type": "number" },
-        "category": { "type": "string" }
-      }
+      },
+      "required": ["tenantId", "description", "amount", "category", "date", "createdBy"]
     },
     "BusinessSettings": {
-      "title": "Business Settings",
-      "description": "Settings for the printing business.",
+      "title": "BusinessSettings",
+      "description": "Configuration for a specific business tenant.",
       "type": "object",
       "properties": {
         "tenantId": { "type": "string" },
@@ -90,51 +93,54 @@
         "nextInvoiceNumber": { "type": "number" },
         "currencyCode": { "type": "string" },
         "currencySymbol": { "type": "string" },
-        "smsProvider": { "type": "string" },
+        "smsProvider": { "type": "string", "enum": ["arkasel", "mnotify"] },
         "smsApiKey": { "type": "string" },
-        "smsSenderId": { "type": "string" }
-      }
+        "smsSenderId": { "type": "string" },
+        "logoUrl": { "type": "string" }
+      },
+      "required": ["tenantId", "name", "email", "invoicePrefix", "nextInvoiceNumber"]
     },
     "PlatformSettings": {
-      "title": "Platform Settings",
-      "description": "Global settings for the platform admin.",
+      "title": "PlatformSettings",
+      "description": "Global settings for the administrative platform.",
       "type": "object",
       "properties": {
         "prices": { "type": "object" },
         "currencyCode": { "type": "string" },
         "currencySymbol": { "type": "string" },
         "paystackPublicKey": { "type": "string" }
-      }
+      },
+      "required": ["prices", "currencyCode", "currencySymbol"]
     }
   },
   "firestore": {
-    "/platform/settings": {
-      "schema": "PlatformSettings",
-      "description": "Global platform settings"
-    },
-    "/tenants/{tenantId}": {
+    "tenants/{tenantId}": {
       "schema": "Tenant",
-      "description": "Global tenant profile"
+      "description": "Individual business profiles."
     },
-    "/orders/{orderId}": {
+    "orders/{orderId}": {
       "schema": "Order",
-      "description": "Orders, filtered by tenantId field"
+      "description": "Orders created by business tenants."
     },
-    "/expenses/{expenseId}": {
-      "schema": "Expense",
-      "description": "Expenses, filtered by tenantId field"
-    },
-    "/customers/{customerId}": {
+    "customers/{customerId}": {
       "schema": "Customer",
-      "description": "Customers, filtered by tenantId field"
+      "description": "Customers managed by business tenants."
     },
-    "/products/{productId}": {
+    "products/{productId}": {
       "schema": "Product",
-      "description": "Products, filtered by tenantId field"
+      "description": "Products/services catalog for business tenants."
     },
-    "/settings/{tenantId}": {
+    "expenses/{expenseId}": {
+      "schema": "Expense",
+      "description": "Expense logs for business tenants."
+    },
+    "settings/{tenantId}": {
       "schema": "BusinessSettings",
-      "description": "Tenant-specific settings"
+      "description": "Local settings for each business."
+    },
+    "platform/settings": {
+      "schema": "PlatformSettings",
+      "description": "Global settings managed by the platform admin."
     }
   }
 }

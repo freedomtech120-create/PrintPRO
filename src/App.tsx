@@ -132,6 +132,11 @@ import {
   SelectTrigger, 
   SelectValue 
 } from '@/components/ui/select';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
@@ -161,6 +166,33 @@ export default function App() {
   const [orderStatusFilter, setOrderStatusFilter] = useState('all');
   const [orderDateFrom, setOrderDateFrom] = useState('');
   const [orderDateTo, setOrderDateTo] = useState('');
+  const [isOnline, setIsOnline] = useState(window.navigator.onLine);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    async function testConnection() {
+      try {
+        await getDocFromServer(doc(db, 'test', 'connection'));
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('the client is offline')) {
+          console.error("Please check your Firebase configuration.");
+        }
+      }
+    }
+    testConnection();
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
@@ -174,7 +206,7 @@ export default function App() {
             id: u.uid,
             email: u.email || '',
             name: u.displayName || 'New Business',
-            photoURL: u.photoURL || undefined,
+            photoURL: u.photoURL || null,
             createdAt: serverTimestamp(),
             isAdmin: u.email === ADMIN_EMAIL,
             trialExpiresAt: Timestamp.fromDate(addDays(new Date(), 5)),
@@ -492,6 +524,12 @@ export default function App() {
             <h2 className="text-lg font-semibold text-slate-800 capitalize">{activeTab}</h2>
           </div>
           <div className="flex items-center gap-3">
+            {!isOnline && (
+              <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 gap-1.5 py-1 px-3">
+                <div className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                Working Offline
+              </Badge>
+            )}
             <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={() => setActiveTab('orders')}>
               <Plus className="w-4 h-4 mr-2" />
               New Order
@@ -1807,6 +1845,7 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
   const [isQuickAddCustomerOpen, setIsQuickAddCustomerOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const receiptRef = useRef<HTMLDivElement>(null);
 
   // Search & Filter State
@@ -1876,6 +1915,8 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
     const uPrice = Number(unitPrice);
     const total = qty * uPrice;
 
+    setIsSubmitting(true);
+
     // Generate Invoice Number
     const invPrefix = settings?.invoicePrefix || 'INV';
     const invNumber = settings?.nextInvoiceNumber || 1001;
@@ -1889,12 +1930,12 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
       items: [
         { 
           description: formData.get('description') as string,
-          productId: selectedProduct?.id,
+          productId: selectedProduct?.id || null,
           quantity: qty, 
           unitPrice: uPrice,
-          width: pricingMode === 'area' ? Number(width) : undefined,
-          height: pricingMode === 'area' ? Number(height) : undefined,
-          area: pricingMode === 'area' ? (Number(width) * Number(height)) : undefined,
+          width: pricingMode === 'area' ? Number(width) : null,
+          height: pricingMode === 'area' ? Number(height) : null,
+          area: pricingMode === 'area' ? (Number(width) * Number(height)) : null,
           total: total
         }
       ],
@@ -1925,6 +1966,8 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
       setUnitPrice('0');
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'orders');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1941,10 +1984,13 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
     };
 
     try {
+      setIsSubmitting(true);
       await addDoc(collection(db, 'customers'), newCustomer);
       setIsQuickAddCustomerOpen(false);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'customers');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -2092,7 +2138,9 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
                           </div>
                         </div>
                         <DialogFooter>
-                          <Button type="submit" className="bg-blue-600 hover:bg-blue-700 w-full">Save Customer</Button>
+                          <Button type="submit" disabled={isSubmitting} className="bg-blue-600 hover:bg-blue-700 w-full font-bold">
+                            {isSubmitting ? "Saving..." : "Save Customer"}
+                          </Button>
                         </DialogFooter>
                       </form>
                     </DialogContent>
@@ -2183,7 +2231,9 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
                 </div>
               </div>
               <DialogFooter>
-                <Button type="submit" className="bg-blue-600 hover:bg-blue-700 w-full">Create Order</Button>
+                <Button type="submit" disabled={isSubmitting} className="bg-blue-600 hover:bg-blue-700 w-full">
+                  {isSubmitting ? "Creating Order..." : "Create Order"}
+                </Button>
               </DialogFooter>
             </form>
           </DialogContent>
@@ -2336,6 +2386,51 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
                       >
                         <Share2 className="w-4 h-4" />
                       </Button>
+                      
+                      <Popover>
+                        <PopoverTrigger render={
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-8 w-8 text-slate-400 hover:text-indigo-600"
+                            title="Quick Payment Status"
+                          >
+                            <CreditCard className="w-4 h-4" />
+                          </Button>
+                        } />
+                        <PopoverContent className="w-40 p-1" align="end">
+                          <div className="flex flex-col">
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              className="justify-start font-medium text-xs h-8" 
+                              onClick={() => updatePaymentStatus(order.id!, 'paid')}
+                            >
+                              <CheckCircle2 className="mr-2 h-3.5 w-3.5 text-green-600" />
+                              Mark as Paid
+                            </Button>
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              className="justify-start font-medium text-xs h-8" 
+                              onClick={() => updatePaymentStatus(order.id!, 'partial')}
+                            >
+                              <Clock className="mr-2 h-3.5 w-3.5 text-amber-600" />
+                              Mark as Partial
+                            </Button>
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              className="justify-start font-medium text-xs h-8" 
+                              onClick={() => updatePaymentStatus(order.id!, 'unpaid')}
+                            >
+                              <AlertCircle className="mr-2 h-3.5 w-3.5 text-red-600" />
+                              Mark as Unpaid
+                            </Button>
+                          </div>
+                        </PopoverContent>
+                      </Popover>
+
                       <Button 
                         variant="ghost" 
                         size="icon" 
@@ -2478,6 +2573,7 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
 
 function ProductsView({ products, settings, user }: { products: Product[], settings: BusinessSettings | null, user: User }) {
   const [isNewProductOpen, setIsNewProductOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleAddProduct = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -2491,10 +2587,13 @@ function ProductsView({ products, settings, user }: { products: Product[], setti
     };
 
     try {
+      setIsSubmitting(true);
       await addDoc(collection(db, 'products'), newProduct);
       setIsNewProductOpen(false);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'products');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -2539,7 +2638,9 @@ function ProductsView({ products, settings, user }: { products: Product[], setti
                 </div>
               </div>
               <DialogFooter>
-                <Button type="submit" className="bg-blue-600 hover:bg-blue-700 w-full">Save Product</Button>
+                <Button type="submit" disabled={isSubmitting} className="bg-blue-600 hover:bg-blue-700 w-full">
+                  {isSubmitting ? "Saving..." : "Save Product"}
+                </Button>
               </DialogFooter>
             </form>
           </DialogContent>
@@ -2576,6 +2677,7 @@ function ProductsView({ products, settings, user }: { products: Product[], setti
 
 function ExpensesView({ expenses, settings, user }: { expenses: Expense[], settings: BusinessSettings | null, user: User }) {
   const [isNewExpenseOpen, setIsNewExpenseOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleAddExpense = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -2591,10 +2693,13 @@ function ExpensesView({ expenses, settings, user }: { expenses: Expense[], setti
     };
 
     try {
+      setIsSubmitting(true);
       await addDoc(collection(db, 'expenses'), newExpense);
       setIsNewExpenseOpen(false);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'expenses');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -2641,7 +2746,9 @@ function ExpensesView({ expenses, settings, user }: { expenses: Expense[], setti
                 </div>
               </div>
               <DialogFooter>
-                <Button type="submit" className="bg-blue-600 hover:bg-blue-700 w-full">Record Expense</Button>
+                <Button type="submit" disabled={isSubmitting} className="bg-blue-600 hover:bg-blue-700 w-full">
+                  {isSubmitting ? "Recording..." : "Record Expense"}
+                </Button>
               </DialogFooter>
             </form>
           </DialogContent>
@@ -2690,6 +2797,7 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
   const [isNewCustomerOpen, setIsNewCustomerOpen] = useState(false);
   const [isBroadcastOpen, setIsBroadcastOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleAddCustomer = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -2704,10 +2812,13 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
     };
 
     try {
+      setIsSubmitting(true);
       await addDoc(collection(db, 'customers'), newCustomer);
       setIsNewCustomerOpen(false);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'customers');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -2821,7 +2932,9 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
                   </div>
                 </div>
                 <DialogFooter>
-                  <Button type="submit" className="bg-blue-600 hover:bg-blue-700 w-full font-bold">Save Customer</Button>
+                  <Button type="submit" disabled={isSubmitting} className="bg-blue-600 hover:bg-blue-700 w-full font-bold">
+                    {isSubmitting ? "Saving..." : "Save Customer"}
+                  </Button>
                 </DialogFooter>
               </form>
             </DialogContent>

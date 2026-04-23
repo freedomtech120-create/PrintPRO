@@ -60,15 +60,13 @@ service cloud.firestore {
       return data.tenantId is string && data.tenantId.size() <= 128
         && data.name is string && data.name.size() <= 100
         && (!('email' in data) || data.email == null || (data.email is string && data.email.size() <= 100))
-        && (!('phone' in data) || data.phone == null || (data.phone is string && data.phone.size() <= 20))
-        && (!('address' in data) || data.address == null || (data.address is string && data.address.size() <= 200));
+        && (!('phone' in data) || data.phone == null || (data.phone is string && data.phone.size() <= 20));
     }
 
     function isValidProduct(data) {
       return data.tenantId is string && data.tenantId.size() <= 128
         && data.name is string && data.name.size() <= 100
-        && data.pricePerSqFt is number
-        && (!('category' in data) || data.category == null || (data.category is string && data.category.size() <= 50));
+        && data.pricePerSqFt is number;
     }
 
     function isValidExpense(data) {
@@ -90,12 +88,12 @@ service cloud.firestore {
     match /tenants/{tenantId} {
       allow get: if isOwner(tenantId) || isAdmin();
       allow list: if isAdmin();
-      allow create: if isOwner(tenantId) && isEmailVerified() && isValidTenant(incoming()) 
+      allow create: if isOwner(tenantId) && isValidTenant(incoming()) 
         && incoming().isApproved == (request.auth.token.email == 'freedomtech120@gmail.com')
         && incoming().subscriptionStatus == 'trial'
         && (!('isAdmin' in incoming()) || incoming().isAdmin == (request.auth.token.email == 'freedomtech120@gmail.com'));
       
-      allow update: if (isOwner(tenantId) && isEmailVerified() && isValidTenant(incoming()) && (
+      allow update: if (isOwner(tenantId) && isValidTenant(incoming()) && (
         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'photoURL'])
       )) || isAdmin();
     }
@@ -103,11 +101,11 @@ service cloud.firestore {
     match /orders/{orderId} {
       allow get: if isSignedIn() && (isOwner(existing().tenantId) || isAdmin());
       allow list: if isSignedIn() && (isOwner(resource.data.tenantId) || isAdmin());
-      allow create: if isEmailVerified() && isOwner(incoming().tenantId) && isValidOrder(incoming())
+      allow create: if isSignedIn() && isOwner(incoming().tenantId) && isValidOrder(incoming())
         && isValidId(orderId)
         && existsAfter(/databases/$(database)/documents/settings/$(incoming().tenantId))
         && incoming().createdAt == request.time;
-      allow update: if isEmailVerified() && (isOwner(existing().tenantId) || isAdmin()) && isValidOrder(incoming())
+      allow update: if isSignedIn() && (isOwner(existing().tenantId) || isAdmin()) && isValidOrder(incoming())
         && incoming().tenantId == existing().tenantId
         && incoming().updatedAt == request.time
         && (
@@ -120,48 +118,36 @@ service cloud.firestore {
     match /customers/{customerId} {
       allow get: if isSignedIn() && (isOwner(existing().tenantId) || isAdmin());
       allow list: if isSignedIn() && (isOwner(resource.data.tenantId) || isAdmin());
-      allow create: if isEmailVerified() && isOwner(incoming().tenantId) && isValidCustomer(incoming())
+      allow create: if isSignedIn() && isOwner(incoming().tenantId) && isValidCustomer(incoming())
         && isValidId(customerId);
-      allow update: if isEmailVerified() && (isOwner(existing().tenantId) || isAdmin()) && isValidCustomer(incoming())
-        && incoming().tenantId == existing().tenantId
-        && (
-          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'phone', 'address'])
-          || isAdmin()
-        );
-      allow delete: if isEmailVerified() && (isOwner(existing().tenantId) || isAdmin());
+      allow update: if isSignedIn() && (isOwner(existing().tenantId) || isAdmin()) && isValidCustomer(incoming())
+        && incoming().tenantId == existing().tenantId;
+      allow delete: if isSignedIn() && (isOwner(existing().tenantId) || isAdmin());
     }
 
     match /products/{productId} {
       allow get: if isSignedIn() && (isOwner(existing().tenantId) || isAdmin());
       allow list: if isSignedIn() && (isOwner(resource.data.tenantId) || isAdmin());
-      allow create: if isEmailVerified() && isOwner(incoming().tenantId) && isValidProduct(incoming())
+      allow create: if isSignedIn() && isOwner(incoming().tenantId) && isValidProduct(incoming())
         && isValidId(productId);
-      allow update: if isEmailVerified() && (isOwner(existing().tenantId) || isAdmin()) && isValidProduct(incoming())
-        && incoming().tenantId == existing().tenantId
-        && (
-          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'pricePerSqFt', 'category'])
-          || isAdmin()
-        );
-      allow delete: if isEmailVerified() && (isOwner(existing().tenantId) || isAdmin());
+      allow update: if isSignedIn() && (isOwner(existing().tenantId) || isAdmin()) && isValidProduct(incoming())
+        && incoming().tenantId == existing().tenantId;
+      allow delete: if isSignedIn() && (isOwner(existing().tenantId) || isAdmin());
     }
 
     match /expenses/{expenseId} {
       allow get: if isSignedIn() && (isOwner(existing().tenantId) || isAdmin());
       allow list: if isSignedIn() && (isOwner(resource.data.tenantId) || isAdmin());
-      allow create: if isEmailVerified() && isOwner(incoming().tenantId) && isValidExpense(incoming())
+      allow create: if isSignedIn() && isOwner(incoming().tenantId) && isValidExpense(incoming())
         && isValidId(expenseId)
         && incoming().date == request.time;
       allow update: if isAdmin();
-      allow delete: if isEmailVerified() && (isOwner(existing().tenantId) || isAdmin());
+      allow delete: if isSignedIn() && (isOwner(existing().tenantId) || isAdmin());
     }
 
     match /settings/{tenantId} {
       allow get: if isOwner(tenantId) || isAdmin();
-      allow create: if isOwner(tenantId) && isEmailVerified() && isValidSettings(incoming())
-        && incoming().tenantId == tenantId;
-      allow update: if (isOwner(tenantId) && isEmailVerified() && isValidSettings(incoming()) && (
-        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'address', 'phone', 'email', 'website', 'invoicePrefix', 'nextInvoiceNumber', 'currencyCode', 'currencySymbol', 'smsProvider', 'smsApiKey', 'smsSenderId', 'logoUrl'])
-      )) || isAdmin();
+      allow create, update: if (isOwner(tenantId) && isValidSettings(incoming())) || isAdmin();
     }
 
     match /platform/settings {

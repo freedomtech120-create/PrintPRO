@@ -3,12 +3,12 @@ export type PaymentStatus = 'unpaid' | 'partial' | 'paid';
 
 export interface OrderItem {
   description: string;
-  productId?: string;
+  productId?: string | null;
   quantity: number;
   unitPrice: number;
-  width?: number; // in feet
-  height?: number; // in feet
-  area?: number; // sq ft
+  width?: number | null; // in feet
+  height?: number | null; // in feet
+  area?: number | null; // sq ft
   total: number;
 }
 
