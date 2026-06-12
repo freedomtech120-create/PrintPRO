@@ -18,6 +18,7 @@ import {
   DollarSign,
   Package,
   ChevronRight,
+  ChevronLeft,
   Download,
   FileText,
   Trash2,
@@ -50,7 +51,10 @@ import {
   UserCircle,
   Briefcase,
   Settings2,
-  Calendar
+  Calendar,
+  Cloud,
+  FileSpreadsheet,
+  RefreshCw
 } from 'lucide-react';
 import { 
   auth, 
@@ -102,6 +106,66 @@ import { useReactToPrint } from 'react-to-print';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '@/lib/utils';
 import axios from 'axios';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
+
+// Helper to generate and optionally download a PDF from a DOM element
+const generatePDFHelper = async (
+  element: HTMLElement,
+  fileName: string,
+  download: boolean = true
+): Promise<Blob | null> => {
+  try {
+    // Hide components we don't want in the PDF (e.g. interactive controls)
+    const excludeElements = element.querySelectorAll('.hide-on-pdf, button');
+    excludeElements.forEach(el => el.classList.add('invisible'));
+
+    // Capture the element using html2canvas
+    const canvas = await html2canvas(element, {
+      scale: 2, // Capture at high density
+      useCORS: true, 
+      logging: false,
+      backgroundColor: '#ffffff',
+    });
+
+    // Restore hidden status
+    excludeElements.forEach(el => el.classList.remove('invisible'));
+
+    const imgData = canvas.toDataURL('image/png');
+    const pdf = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4',
+    });
+
+    const imgWidth = 210; // A4 standard width
+    const pageHeight = 295; // A4 standard height
+    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+    let heightLeft = imgHeight;
+    let position = 0;
+
+    // Drawing first page
+    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
+    heightLeft -= pageHeight;
+
+    // Handle multi-page PDFs
+    while (heightLeft >= 0) {
+      position = heightLeft - imgHeight;
+      pdf.addPage();
+      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
+      heightLeft -= pageHeight;
+    }
+
+    if (download) {
+      pdf.save(fileName);
+    }
+
+    return pdf.output('blob');
+  } catch (error) {
+    console.error('Error generating PDF:', error);
+    return null;
+  }
+};
 
 // UI Components
 import { Button } from '@/components/ui/button';
@@ -160,6 +224,8 @@ export default function App() {
   const [platformSettings, setPlatformSettings] = useState<PlatformSettings | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [viewingTenantId, setViewingTenantId] = useState<string | null>(null);
+  const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // Orders Search & Filter State
   const [orderSearchTerm, setOrderSearchTerm] = useState('');
@@ -376,7 +442,259 @@ export default function App() {
 
   const handleLogout = () => {
     signOut(auth);
+    setGoogleAccessToken(null);
   };
+
+  const handleConnectGoogleSheets = async () => {
+    const provider = new GoogleAuthProvider();
+    provider.addScope('https://www.googleapis.com/auth/spreadsheets');
+    provider.addScope('https://www.googleapis.com/auth/drive.file');
+    try {
+      const result = await signInWithPopup(auth, provider);
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      if (credential?.accessToken) {
+        setGoogleAccessToken(credential.accessToken);
+        return credential.accessToken;
+      }
+    } catch (error) {
+      console.error("Connect Google Sheets failed:", error);
+      alert("Failed to connect to Google Sheets. Please make sure to grant the required permissions.");
+    }
+    return null;
+  };
+
+  const syncToGoogleSheetsQuietly = async (tokenInput?: string) => {
+    const activeToken = tokenInput || googleAccessToken;
+    if (!activeToken || !settings?.googleSheetId) return;
+    try {
+      const sheetId = settings.googleSheetId;
+      const updateSheetValQuietly = async (tabName: string, headers: string[], rows: any[][]) => {
+        await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${tabName}:clear`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${activeToken}` }
+        });
+        await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${tabName}!A1?valueInputOption=USER_ENTERED`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${activeToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            range: `${tabName}!A1`,
+            majorDimension: 'ROWS',
+            values: [headers, ...rows]
+          })
+        });
+      };
+
+      const orderHeaders = ['Order ID', 'Invoice Number', 'Customer Name', 'Total Amount', 'Paid Amount', 'Status', 'Payment Status', 'Items Description', 'Created At', 'Created By'];
+      const orderRows = orders.map(o => [
+        o.id || '',
+        o.invoiceNumber || '',
+        o.customerName || '',
+        o.totalAmount || 0,
+        o.paidAmount || 0,
+        o.status || '',
+        o.paymentStatus || '',
+        o.items?.map(it => `${it.description || ''} (Qty: ${it.quantity || 1}, Price: ${it.unitPrice || 0}, Total: ${it.total || 0})`).join('; ') || '',
+        o.createdAt && typeof o.createdAt.toDate === 'function' ? o.createdAt.toDate().toISOString() : String(o.createdAt || ''),
+        o.createdBy || ''
+      ]);
+      await updateSheetValQuietly('Orders', orderHeaders, orderRows);
+
+      const expenseHeaders = ['Expense ID', 'Description', 'Amount', 'Category', 'Date', 'Created By'];
+      const expenseRows = expenses.map(e => [
+        e.id || '',
+        e.description || '',
+        e.amount || 0,
+        e.category || '',
+        e.date && typeof e.date.toDate === 'function' ? e.date.toDate().toISOString() : String(e.date || ''),
+        e.createdBy || ''
+      ]);
+      await updateSheetValQuietly('Expenses', expenseHeaders, expenseRows);
+
+      const customerHeaders = ['Customer ID', 'Name', 'Email', 'Phone', 'Address'];
+      const customerRows = customers.map(c => [
+        c.id || '',
+        c.name || '',
+        c.email || '',
+        c.phone || '',
+        c.address || ''
+      ]);
+      await updateSheetValQuietly('Customers', customerHeaders, customerRows);
+
+      const productHeaders = ['Product ID', 'Name', 'Price per Sq Ft', 'Category'];
+      const productRows = products.map(p => [
+        p.id || '',
+        p.name || '',
+        p.pricePerSqFt || 0,
+        p.category || ''
+      ]);
+      await updateSheetValQuietly('Products', productHeaders, productRows);
+
+      const lastSynced = new Date().toLocaleString();
+      await setDoc(doc(db, 'settings', user!.uid), {
+        googleSheetsLastSyncedAt: lastSynced
+      }, { merge: true });
+    } catch (err) {
+      console.error("Quiet background sync failed:", err);
+    }
+  };
+
+  const syncToGoogleSheets = async (tokenToUse?: string) => {
+    const activeToken = tokenToUse || googleAccessToken;
+    if (!activeToken) {
+      alert("Please connect your Google Account first.");
+      return;
+    }
+
+    if (!settings) return;
+
+    setIsSyncing(true);
+    try {
+      let sheetId = settings.googleSheetId;
+      let sheetUrl = settings.googleSheetUrl;
+
+      // 1. Create spreadsheet if it doesn't exist
+      if (!sheetId) {
+        const createRes = await fetch('https://sheets.googleapis.com/v4/spreadsheets', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${activeToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            properties: {
+              title: `${settings.name || 'My Print Shop'} - PrintPro Manager Backup`
+            },
+            sheets: [
+              { properties: { title: 'Orders' } },
+              { properties: { title: 'Expenses' } },
+              { properties: { title: 'Customers' } },
+              { properties: { title: 'Products' } }
+            ]
+          })
+        });
+
+        if (!createRes.ok) {
+          const errMsg = await createRes.text();
+          throw new Error(`Failed to create Google Sheet: ${errMsg}`);
+        }
+
+        const createData = await createRes.json();
+        sheetId = createData.spreadsheetId;
+        sheetUrl = createData.spreadsheetUrl;
+
+        // Save to business settings in Firestore
+        await setDoc(doc(db, 'settings', user!.uid), {
+          googleSheetId: sheetId,
+          googleSheetUrl: sheetUrl
+        }, { merge: true });
+      }
+
+      // Helper function to update values
+      const updateSheetVal = async (tabName: string, headers: string[], rows: any[][]) => {
+        // Clear existing sheet contents first to avoid stale entries
+        await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${tabName}:clear`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${activeToken}`
+          }
+        });
+
+        // Write fresh values
+        const updateRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${tabName}!A1?valueInputOption=USER_ENTERED`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${activeToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            range: `${tabName}!A1`,
+            majorDimension: 'ROWS',
+            values: [headers, ...rows]
+          })
+        });
+
+        if (!updateRes.ok) {
+          const errMsg = await updateRes.text();
+          throw new Error(`Failed to write to sheet tab '${tabName}': ${errMsg}`);
+        }
+      };
+
+      // 2. Prep and send data for Orders
+      const orderHeaders = ['Order ID', 'Invoice Number', 'Customer Name', 'Total Amount', 'Paid Amount', 'Status', 'Payment Status', 'Items Description', 'Created At', 'Created By'];
+      const orderRows = orders.map(o => [
+        o.id || '',
+        o.invoiceNumber || '',
+        o.customerName || '',
+        o.totalAmount || 0,
+        o.paidAmount || 0,
+        o.status || '',
+        o.paymentStatus || '',
+        o.items?.map(it => `${it.description || ''} (Qty: ${it.quantity || 1}, Price: ${it.unitPrice || 0}, Total: ${it.total || 0})`).join('; ') || '',
+        o.createdAt && typeof o.createdAt.toDate === 'function' ? o.createdAt.toDate().toISOString() : String(o.createdAt || ''),
+        o.createdBy || ''
+      ]);
+      await updateSheetVal('Orders', orderHeaders, orderRows);
+
+      // 3. Prep and send data for Expenses
+      const expenseHeaders = ['Expense ID', 'Description', 'Amount', 'Category', 'Date', 'Created By'];
+      const expenseRows = expenses.map(e => [
+        e.id || '',
+        e.description || '',
+        e.amount || 0,
+        e.category || '',
+        e.date && typeof e.date.toDate === 'function' ? e.date.toDate().toISOString() : String(e.date || ''),
+        e.createdBy || ''
+      ]);
+      await updateSheetVal('Expenses', expenseHeaders, expenseRows);
+
+      // 4. Prep and send data for Customers
+      const customerHeaders = ['Customer ID', 'Name', 'Email', 'Phone', 'Address'];
+      const customerRows = customers.map(c => [
+        c.id || '',
+        c.name || '',
+        c.email || '',
+        c.phone || '',
+        c.address || ''
+      ]);
+      await updateSheetVal('Customers', customerHeaders, customerRows);
+
+      // 5. Prep and send data for Products
+      const productHeaders = ['Product ID', 'Name', 'Price per Sq Ft', 'Category'];
+      const productRows = products.map(p => [
+        p.id || '',
+        p.name || '',
+        p.pricePerSqFt || 0,
+        p.category || ''
+      ]);
+      await updateSheetVal('Products', productHeaders, productRows);
+
+      // Update sync time
+      const lastSynced = new Date().toLocaleString();
+      await setDoc(doc(db, 'settings', user!.uid), {
+        googleSheetsLastSyncedAt: lastSynced
+      }, { merge: true });
+
+      alert("Successfully synchronized all data to your Google Sheet!");
+    } catch (err: any) {
+      console.error(err);
+      alert(`Synchronizing to Google Sheets failed: ${err.message || err}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Auto-sync effect: when lists change, if auto-sync is enabled and token exists, run sync in background without alerting
+  useEffect(() => {
+    if (settings?.googleSheetsAutoSync && googleAccessToken && settings.googleSheetId) {
+      const timer = setTimeout(() => {
+        syncToGoogleSheetsQuietly();
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [orders, expenses, customers, products, googleAccessToken, settings?.googleSheetsAutoSync, settings?.googleSheetId]);
 
   if (loading) {
     return (
@@ -475,6 +793,12 @@ export default function App() {
               label="Messaging" 
               active={activeTab === 'messaging'} 
               onClick={() => { setActiveTab('messaging'); setIsSidebarOpen(false); }} 
+            />
+            <NavItem 
+              icon={<BarChart3 className="w-5 h-5" />} 
+              label="Accounts Report" 
+              active={activeTab === 'reports'} 
+              onClick={() => { setActiveTab('reports'); setIsSidebarOpen(false); }} 
             />
             {user?.email === ADMIN_EMAIL && (
               <NavItem 
@@ -575,12 +899,22 @@ export default function App() {
               {activeTab === 'expenses' && <ExpensesView expenses={expenses} settings={settings} user={user} />}
               {activeTab === 'customers' && <CustomersView customers={customers} settings={settings} user={user} />}
               {activeTab === 'messaging' && <MessagingView customers={customers} settings={settings} />}
+              {activeTab === 'reports' && <MonthlyReportView orders={orders} expenses={expenses} settings={settings} user={user} />}
               {activeTab === 'subscription' && (
                 <div className="max-w-5xl mx-auto py-8">
                   <SubscriptionView tenant={tenant} settings={platformSettings} user={user} onLogout={handleLogout} />
                 </div>
               )}
-              {activeTab === 'settings' && <SettingsView settings={settings} user={user} />}
+              {activeTab === 'settings' && (
+                <SettingsView 
+                  settings={settings} 
+                  user={user} 
+                  googleAccessToken={googleAccessToken}
+                  isSyncing={isSyncing}
+                  handleConnectGoogleSheets={handleConnectGoogleSheets}
+                  syncToGoogleSheets={syncToGoogleSheets}
+                />
+              )}
               {activeTab === 'admin' && user?.email === ADMIN_EMAIL && (
                 <AdminView 
                   tenants={tenants} 
@@ -1846,6 +2180,7 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const receiptRef = useRef<HTMLDivElement>(null);
 
   // Search & Filter State
@@ -2027,6 +2362,64 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
     message += `\n\nThank you for choosing ${settings?.name || 'PrintPro Manager'}!`;
     
     return message;
+  };
+
+  const handleDownloadPDF = async (order: Order) => {
+    if (!receiptRef.current) return;
+    setIsGeneratingPDF(true);
+    const invoiceNum = order.invoiceNumber || `INV-${order.id?.slice(-8).toUpperCase()}`;
+    const fileName = `${invoiceNum}.pdf`;
+    try {
+      await generatePDFHelper(receiptRef.current, fileName, true);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to generate PDF download.");
+    } finally {
+      setIsGeneratingPDF(false);
+    }
+  };
+
+  const handleSharePDF = async (order: Order, method: 'whatsapp' | 'email' | 'sms') => {
+    if (!receiptRef.current) return;
+    setIsGeneratingPDF(true);
+    const invoiceNum = order.invoiceNumber || `INV-${order.id?.slice(-8).toUpperCase()}`;
+    const fileName = `${invoiceNum}.pdf`;
+    
+    // Fallback standard text share function
+    const textShareFallback = () => {
+      if (method === 'whatsapp') {
+        handleShareWhatsApp(order);
+      } else if (method === 'email') {
+        handleShareEmail(order);
+      } else if (method === 'sms') {
+        handleShareSMS(order);
+      }
+    };
+
+    try {
+      const blob = await generatePDFHelper(receiptRef.current, fileName, false);
+      if (blob) {
+        const file = new File([blob], fileName, { type: 'application/pdf' });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            files: [file],
+            title: fileName,
+            text: `Invoice ${invoiceNum} from ${settings?.name || 'PrintPro Manager'}`
+          });
+        } else {
+          if (confirm("Direct PDF file sharing is only supported on mobile browsers. Download the PDF and share the summary via text instead?")) {
+            await generatePDFHelper(receiptRef.current, fileName, true); // trigger download
+            textShareFallback();
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert("Direct PDF sharing failed. Triggering PDF download.");
+      await generatePDFHelper(receiptRef.current, fileName, true);
+    } finally {
+      setIsGeneratingPDF(false);
+    }
   };
 
   const handleShareWhatsApp = (order: Order) => {
@@ -2542,28 +2935,56 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
               </div>
             )}
           </div>
-          <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap justify-end gap-3">
-            <Button variant="outline" onClick={() => setIsReceiptOpen(false)}>Close</Button>
-            {selectedOrder && (
-              <>
-                <Button variant="outline" className="text-green-600 border-green-200 hover:bg-green-50" onClick={() => handleShareWhatsApp(selectedOrder)}>
-                  <Share2 className="w-4 h-4 mr-2" />
-                  WhatsApp
-                </Button>
-                <Button variant="outline" className="text-blue-600 border-blue-200 hover:bg-blue-50" onClick={() => handleShareEmail(selectedOrder)}>
-                  <Mail className="w-4 h-4 mr-2" />
-                  Email
-                </Button>
-                <Button variant="outline" className="text-purple-600 border-purple-200 hover:bg-purple-50" onClick={() => handleShareSMS(selectedOrder)}>
-                  <MessageSquare className="w-4 h-4 mr-2" />
-                  SMS
-                </Button>
-              </>
-            )}
-            <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => handlePrint()}>
-              <Printer className="w-4 h-4 mr-2" />
-              Print Invoice
-            </Button>
+          <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap gap-2">
+              {selectedOrder && (
+                <>
+                  <Button 
+                    variant="outline" 
+                    className="text-rose-600 border-rose-200 hover:bg-rose-50" 
+                    onClick={() => handleDownloadPDF(selectedOrder)}
+                    disabled={isGeneratingPDF}
+                  >
+                    <Download className="w-4 h-4 mr-2" />
+                    {isGeneratingPDF ? "Generating..." : "Download PDF"}
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    className="text-emerald-600 border-emerald-200 hover:bg-emerald-50" 
+                    onClick={() => handleSharePDF(selectedOrder, 'whatsapp')}
+                    disabled={isGeneratingPDF}
+                  >
+                    <Share2 className="w-4 h-4 mr-2" />
+                    WhatsApp PDF
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    className="text-blue-600 border-blue-200 hover:bg-blue-50" 
+                    onClick={() => handleSharePDF(selectedOrder, 'email')}
+                    disabled={isGeneratingPDF}
+                  >
+                    <Mail className="w-4 h-4 mr-2" />
+                    Email PDF
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    className="text-purple-600 border-purple-200 hover:bg-purple-50" 
+                    onClick={() => handleSharePDF(selectedOrder, 'sms')}
+                    disabled={isGeneratingPDF}
+                  >
+                    <MessageSquare className="w-4 h-4 mr-2" />
+                    SMS PDF
+                  </Button>
+                </>
+              )}
+            </div>
+            <div className="flex gap-2 ml-auto">
+              <Button variant="outline" onClick={() => setIsReceiptOpen(false)}>Close</Button>
+              <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => handlePrint()}>
+                <Printer className="w-4 h-4 mr-2" />
+                Print Invoice
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
@@ -2974,7 +3395,21 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
   );
 }
 
-function SettingsView({ settings, user }: { settings: BusinessSettings | null, user: User }) {
+function SettingsView({ 
+  settings, 
+  user, 
+  googleAccessToken, 
+  isSyncing, 
+  handleConnectGoogleSheets, 
+  syncToGoogleSheets 
+}: { 
+  settings: BusinessSettings | null, 
+  user: User,
+  googleAccessToken: string | null,
+  isSyncing: boolean,
+  handleConnectGoogleSheets: () => Promise<string | null>,
+  syncToGoogleSheets: (token?: string) => Promise<void>
+}) {
   const handleSaveSettings = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -3004,7 +3439,7 @@ function SettingsView({ settings, user }: { settings: BusinessSettings | null, u
   };
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-2xl mx-auto space-y-6">
       <Card className="shadow-sm border-slate-200">
         <CardHeader>
           <CardTitle>Business Settings</CardTitle>
@@ -3097,6 +3532,794 @@ function SettingsView({ settings, user }: { settings: BusinessSettings | null, u
           </form>
         </CardContent>
       </Card>
+
+      <Card className="shadow-sm border-slate-200 overflow-hidden">
+        <CardHeader className="bg-gradient-to-r from-emerald-50 to-blue-50/50 border-b border-slate-100">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-emerald-500 rounded-lg text-white">
+              <FileSpreadsheet className="w-5 h-5" />
+            </div>
+            <div>
+              <CardTitle className="text-base font-bold text-slate-900">Google Sheets Integration</CardTitle>
+              <CardDescription className="text-xs">
+                Sync and back up your print shop data directly to Google Drive and Google Sheets.
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="pt-6 space-y-4">
+          <p className="text-xs text-slate-500 leading-relaxed">
+            Connecting Google Sheets lets you create and back up all your Orders, Expenses, Customers, and Products to a spreadsheet in your personal Google Drive. Keep your data locally accessible without any complex hosting.
+          </p>
+
+          {!googleAccessToken ? (
+            <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl flex flex-col items-center justify-center gap-3 text-center">
+              <div className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-400">
+                <Cloud className="w-5 h-5" />
+              </div>
+              <div>
+                <h5 className="text-xs font-semibold text-slate-800">No active connection</h5>
+                <p className="text-[10px] text-slate-400">Connect your Google account with Sheets and Drive permissions to start syncing.</p>
+              </div>
+              <Button 
+                onClick={handleConnectGoogleSheets} 
+                className="bg-emerald-600 hover:bg-emerald-700 text-white w-full sm:w-auto text-xs"
+              >
+                Connect Google Drive & Sheets
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="p-4 bg-emerald-50/50 border border-emerald-100 rounded-xl flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-bounce" />
+                  <div>
+                    <h5 className="text-xs font-semibold text-emerald-800">Successfully Connected</h5>
+                    <p className="text-[10px] text-emerald-600/80 font-medium font-mono">Token authorized for sessions</p>
+                  </div>
+                </div>
+                <Button 
+                  onClick={() => syncToGoogleSheets()} 
+                  disabled={isSyncing} 
+                  variant="outline"
+                  className="bg-white border-emerald-200 hover:bg-emerald-50 text-emerald-700 font-medium text-xs py-1 px-3"
+                >
+                  {isSyncing ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin mr-1.5" />
+                      Syncing...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
+                      Sync All Now
+                    </>
+                  )}
+                </Button>
+              </div>
+
+              {settings?.googleSheetId ? (
+                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="space-y-0.5">
+                      <div className="text-xs font-semibold text-slate-800 flex items-center gap-1.5">
+                        Backup Spreadsheet Linked
+                      </div>
+                      <p className="text-[10px] text-slate-500">
+                        Spreadsheet ID: <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-[9px]">{settings.googleSheetId.substring(0, 16)}...</code>
+                      </p>
+                    </div>
+                    <a 
+                      href={settings.googleSheetUrl} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center text-xs font-medium text-blue-600 hover:underline hover:text-blue-700"
+                    >
+                      Open Google Sheet
+                      <ExternalLink className="w-3 h-3 ml-1" />
+                    </a>
+                  </div>
+
+                  <div className="pt-2.5 border-t border-slate-200/60 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+                    <div>
+                      Last synced: <span className="font-semibold text-slate-700">{settings.googleSheetsLastSyncedAt || "Never"}</span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <input 
+                        type="checkbox" 
+                        id="autoSync" 
+                        checked={settings?.googleSheetsAutoSync || false}
+                        onChange={async (e) => {
+                          const autoSync = e.target.checked;
+                          try {
+                            await setDoc(doc(db, 'settings', user.uid), {
+                              googleSheetsAutoSync: autoSync
+                            }, { merge: true });
+                          } catch (err) {
+                            console.error(err);
+                          }
+                        }}
+                        className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" 
+                      />
+                      <label htmlFor="autoSync" className="font-medium cursor-pointer text-slate-600 select-none">
+                        Auto-sync on any changes
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 bg-blue-50/50 border border-blue-100 rounded-xl flex flex-col items-center justify-center gap-2.5 text-center">
+                  <p className="text-xs text-blue-800 font-semibold">No backing spreadsheet created yet</p>
+                  <Button 
+                    onClick={() => syncToGoogleSheets()} 
+                    disabled={isSyncing} 
+                    className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-4"
+                  >
+                    {isSyncing ? "Creating Spreadsheet..." : "Create Spreadsheet Backup"}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ==========================================
+// MONTHLY ACCOUNTS & REPORT VIEW
+// ==========================================
+
+function MonthlyReportView({ 
+  orders, 
+  expenses, 
+  settings, 
+  user 
+}: { 
+  orders: Order[], 
+  expenses: Expense[], 
+  settings: BusinessSettings | null, 
+  user: User 
+}) {
+  const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth());
+  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+  
+  const reportRef = useRef<HTMLDivElement>(null);
+
+  const handlePrint = useReactToPrint({
+    contentRef: reportRef,
+  });
+
+  const MONTHS = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
+
+  const generateReportSummaryText = () => {
+    const monthName = MONTHS[selectedMonth];
+    let msg = `Monthly Accounts Statement for ${monthName} ${selectedYear}\n`;
+    msg += `Business: ${settings?.name || 'PrintPro'}\n\n`;
+    msg += `📊 SUMMARY:\n`;
+    msg += `- Gross Invoiced: ${settings?.currencySymbol || 'GH₵'}${totalInvoiced.toLocaleString(undefined, {minimumFractionDigits: 2})}\n`;
+    msg += `- Realized Cash: ${settings?.currencySymbol || 'GH₵'}${totalCollected.toLocaleString(undefined, {minimumFractionDigits: 2})}\n`;
+    msg += `- Receivables: ${settings?.currencySymbol || 'GH₵'}${totalOutstanding.toLocaleString(undefined, {minimumFractionDigits: 2})}\n`;
+    msg += `- Expenditures: ${settings?.currencySymbol || 'GH₵'}${totalExpenses.toLocaleString(undefined, {minimumFractionDigits: 2})}\n`;
+    msg += `- Net Margin: ${settings?.currencySymbol || 'GH₵'}${cashNetProfit.toLocaleString(undefined, {minimumFractionDigits: 2})}\n\n`;
+    msg += `Generated with PrintPro Manager.`;
+    return msg;
+  };
+
+  const handleDownloadReportPDF = async () => {
+    if (!reportRef.current) return;
+    setIsGeneratingPDF(true);
+    const monthName = MONTHS[selectedMonth];
+    const fileName = `Accounts_Report_${monthName}_${selectedYear}.pdf`;
+    try {
+      await generatePDFHelper(reportRef.current, fileName, true);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to download PDF.");
+    } finally {
+      setIsGeneratingPDF(false);
+    }
+  };
+
+  const handleShareReportPDF = async (method: 'whatsapp' | 'email' | 'sms') => {
+    if (!reportRef.current) return;
+    setIsGeneratingPDF(true);
+    const monthName = MONTHS[selectedMonth];
+    const fileName = `Accounts_Report_${monthName}_${selectedYear}.pdf`;
+    
+    const textShareFallback = () => {
+      const text = encodeURIComponent(generateReportSummaryText());
+      if (method === 'whatsapp') {
+        window.open(`https://wa.me/?text=${text}`, '_blank');
+      } else if (method === 'email') {
+        const subject = encodeURIComponent(`Monthly Accounts Statement: ${monthName} ${selectedYear}`);
+        window.location.href = `mailto:?subject=${subject}&body=${text}`;
+      } else if (method === 'sms') {
+        window.location.href = `sms:?body=${text}`;
+      }
+    };
+
+    try {
+      const blob = await generatePDFHelper(reportRef.current, fileName, false);
+      if (blob) {
+        const file = new File([blob], fileName, { type: 'application/pdf' });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            files: [file],
+            title: fileName,
+            text: `Monthly Accounts Report for ${monthName} ${selectedYear}`
+          });
+        } else {
+          if (confirm("Direct PDF file sharing is only supported on mobile devices. We will download the PDF for you, and you can share the summary text instead?")) {
+            await generatePDFHelper(reportRef.current, fileName, true); // trigger download
+            textShareFallback();
+          }
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Sharing PDF failed. Triggering manual download instead.");
+      await generatePDFHelper(reportRef.current, fileName, true);
+    } finally {
+      setIsGeneratingPDF(false);
+    }
+  };
+
+  const YEARS = Array.from({ length: 7 }, (_, i) => new Date().getFullYear() - 3 + i);
+
+  // Parse safety helpers
+  const getOrderDate = (o: Order) => {
+    if (!o.createdAt) return new Date(2000, 0, 1);
+    return o.createdAt instanceof Timestamp ? o.createdAt.toDate() : new Date(o.createdAt);
+  };
+
+  const getExpenseDate = (e: Expense) => {
+    if (!e.date) return new Date(2000, 0, 1);
+    return e.date instanceof Timestamp ? e.date.toDate() : new Date(e.date);
+  };
+
+  // Filter checks
+  const isSameMonthAndYear = (date: Date, m: number, y: number) => {
+    return date.getMonth() === m && date.getFullYear() === y;
+  };
+
+  // Filter lists
+  const monthlyOrders = orders.filter(o => isSameMonthAndYear(getOrderDate(o), selectedMonth, selectedYear));
+  const activeOrders = monthlyOrders.filter(o => o.status !== 'cancelled');
+  const cancelledOrders = monthlyOrders.filter(o => o.status === 'cancelled');
+
+  const monthlyExpenses = expenses.filter(e => isSameMonthAndYear(getExpenseDate(e), selectedMonth, selectedYear));
+
+  // Computations
+  const totalInvoiced = activeOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
+  const totalCollected = activeOrders.reduce((sum, o) => sum + (o.paidAmount || 0), 0);
+  const totalOutstanding = activeOrders.reduce((sum, o) => sum + ((o.totalAmount || 0) - (o.paidAmount || 0)), 0);
+  const totalExpenses = monthlyExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+
+  // Profit/Loss
+  const accrualNetProfit = totalInvoiced - totalExpenses;
+  const cashNetProfit = totalCollected - totalExpenses;
+
+  // Breakdown aggregations
+  const expensesByCategory = monthlyExpenses.reduce((acc, e) => {
+    const cat = e.category?.toLowerCase() || 'other';
+    acc[cat] = (acc[cat] || 0) + (e.amount || 0);
+    return acc;
+  }, {} as Record<string, number>);
+
+  const ordersByStatus = monthlyOrders.reduce((acc, o) => {
+    const st = o.status || 'pending';
+    acc[st] = (acc[st] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  // Render variables
+  const currencySymbol = settings?.currencySymbol || 'GH₵';
+  const businessName = settings?.name || 'My Print Shop';
+  const logoUrl = settings?.logoUrl || '';
+
+  // Daily Chart Data
+  const daysInMonthCount = new Date(selectedYear, selectedMonth + 1, 0).getDate();
+  const dailyChartData = Array.from({ length: daysInMonthCount }, (_, idx) => {
+    const day = idx + 1;
+    const dayOrders = activeOrders.filter(o => getOrderDate(o).getDate() === day);
+    const dayExpenses = monthlyExpenses.filter(e => getExpenseDate(e).getDate() === day);
+
+    return {
+      day: day.toString(),
+      Invoiced: dayOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0),
+      Collected: dayOrders.reduce((sum, o) => sum + (o.paidAmount || 0), 0),
+      Expenses: dayExpenses.reduce((sum, e) => sum + (e.amount || 0), 0),
+    };
+  });
+
+  // Month navigation helpers
+  const handlePrevMonth = () => {
+    if (selectedMonth === 0) {
+      setSelectedMonth(11);
+      setSelectedYear(y => y - 1);
+    } else {
+      setSelectedMonth(m => m - 1);
+    }
+  };
+
+  const handleNextMonth = () => {
+    if (selectedMonth === 11) {
+      setSelectedMonth(0);
+      setSelectedYear(y => y + 1);
+    } else {
+      setSelectedMonth(m => m + 1);
+    }
+  };
+
+  const getStatusBadge = (status: string) => {
+    const base = "px-2.5 py-1 text-xs font-bold rounded-lg border uppercase tracking-wider";
+    switch (status.toLowerCase()) {
+      case 'completed': 
+        return <span className={cn(base, "bg-green-50 text-green-700 border-green-200")}>Completed</span>;
+      case 'delivered': 
+        return <span className={cn(base, "bg-blue-50 text-blue-700 border-blue-200")}>Delivered</span>;
+      case 'processing': 
+        return <span className={cn(base, "bg-amber-50 text-amber-700 border-amber-200")}>Processing</span>;
+      case 'pending': 
+        return <span className={cn(base, "bg-slate-100 text-slate-700 border-slate-200")}>Pending</span>;
+      case 'cancelled': 
+        return <span className={cn(base, "bg-rose-50 text-rose-700 border-rose-200")}>Cancelled</span>;
+      default: 
+        return <span className={cn(base, "bg-slate-50 text-slate-600 border-slate-100")}>{status}</span>;
+    }
+  };
+
+  const getPaymentBadge = (status: string) => {
+    const base = "px-2.5 py-1 text-xs font-bold rounded-lg border uppercase tracking-wider";
+    switch (status.toLowerCase()) {
+      case 'paid': 
+        return <span className={cn(base, "bg-emerald-50 text-emerald-700 border-emerald-200")}>Paid</span>;
+      case 'partial': 
+        return <span className={cn(base, "bg-orange-50 text-orange-700 border-orange-200")}>Partial</span>;
+      case 'unpaid': 
+        return <span className={cn(base, "bg-rose-50 text-rose-700 border-rose-200")}>Unpaid</span>;
+      default: 
+        return <span className={cn(base, "bg-slate-50 text-slate-600 border-slate-100")}>{status}</span>;
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Interactive Month Selection Controls (Hidden on Print) */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-4 lg:p-6 rounded-2xl shadow-sm border border-slate-200 print:hidden animate-in fade-in duration-300">
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="icon" className="h-10 w-10 border-slate-200" onClick={handlePrevMonth}>
+            <ChevronLeft className="w-5 h-5" />
+          </Button>
+          <div className="flex gap-2">
+            <Select value={selectedMonth.toString()} onValueChange={(val) => setSelectedMonth(Number(val))}>
+              <SelectTrigger className="w-[140px] font-medium bg-white border-slate-200">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MONTHS.map((name, idx) => (
+                  <SelectItem key={idx} value={idx.toString()}>{name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select value={selectedYear.toString()} onValueChange={(val) => setSelectedYear(Number(val))}>
+              <SelectTrigger className="w-[110px] font-medium bg-white border-slate-200">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {YEARS.map((year) => (
+                  <SelectItem key={year} value={year.toString()}>{year}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button variant="outline" size="icon" className="h-10 w-10 border-slate-200" onClick={handleNextMonth}>
+            <ChevronRight className="w-5 h-5" />
+          </Button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button 
+            onClick={() => handlePrint()} 
+            disabled={monthlyOrders.length === 0 && monthlyExpenses.length === 0}
+            variant="outline"
+            className="border-slate-200"
+          >
+            <Printer className="w-4 h-4 mr-2" />
+            Print Report
+          </Button>
+          <Button 
+            onClick={handleDownloadReportPDF} 
+            disabled={(monthlyOrders.length === 0 && monthlyExpenses.length === 0) || isGeneratingPDF}
+            className="bg-rose-600 hover:bg-rose-700 text-white"
+          >
+            <Download className="w-4 h-4 mr-2" />
+            {isGeneratingPDF ? "Generating..." : "Download PDF"}
+          </Button>
+          <Button 
+            onClick={() => handleShareReportPDF('whatsapp')} 
+            disabled={(monthlyOrders.length === 0 && monthlyExpenses.length === 0) || isGeneratingPDF}
+            variant="outline"
+            className="text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+          >
+            <Share2 className="w-4 h-4 mr-2" />
+            WhatsApp PDF
+          </Button>
+          <Button 
+            onClick={() => handleShareReportPDF('email')} 
+            disabled={(monthlyOrders.length === 0 && monthlyExpenses.length === 0) || isGeneratingPDF}
+            variant="outline"
+            className="text-blue-600 border-blue-200 hover:bg-blue-50"
+          >
+            <Mail className="w-4 h-4 mr-2" />
+            Email PDF
+          </Button>
+          <Button 
+            onClick={() => handleShareReportPDF('sms')} 
+            disabled={(monthlyOrders.length === 0 && monthlyExpenses.length === 0) || isGeneratingPDF}
+            variant="outline"
+            className="text-purple-600 border-purple-200 hover:bg-purple-50"
+          >
+            <MessageSquare className="w-4 h-4 mr-2" />
+            SMS PDF
+          </Button>
+        </div>
+      </div>
+
+      {monthlyOrders.length === 0 && monthlyExpenses.length === 0 ? (
+        <div className="flex flex-col items-center justify-center p-16 text-center bg-white border border-slate-200 rounded-3xl shadow-sm">
+          <div className="bg-slate-50 p-4 rounded-full mb-4">
+            <Calendar className="w-12 h-12 text-slate-400" />
+          </div>
+          <h3 className="text-lg font-bold text-slate-900">No transactions recorded</h3>
+          <p className="text-sm text-slate-500 max-w-sm mt-1">There are no jobs or operating expenses logged in {MONTHS[selectedMonth]} {selectedYear}.</p>
+        </div>
+      ) : (
+        /* Printable Report Sheet */
+        <div 
+          ref={reportRef} 
+          className="print:bg-white print:text-black print:p-8 space-y-6"
+        >
+          {/* Printable Business Header Brand */}
+          <div className="hidden print:flex items-start justify-between border-b-2 border-slate-200 pb-6 mb-4">
+            <div>
+              <h1 className="text-2xl font-black text-slate-900 tracking-tight uppercase">{businessName}</h1>
+              {settings?.address && <p className="text-xs text-slate-500 mt-1">{settings.address}</p>}
+              {settings?.phone && <p className="text-xs text-slate-500">{settings.phone}</p>}
+              {settings?.email && <p className="text-xs text-slate-500">{settings.email}</p>}
+            </div>
+            <div className="text-right">
+              <h2 className="text-sm font-bold tracking-tight text-blue-600 uppercase">Financial Statement</h2>
+              <p className="text-2xl font-bold text-slate-800 mt-1">{MONTHS[selectedMonth]} {selectedYear}</p>
+              <p className="text-[10px] text-slate-400 mt-1 uppercase font-semibold">Generated on: {format(new Date(), 'PPpp')}</p>
+            </div>
+          </div>
+
+          <div className="print:hidden">
+            <h2 className="text-lg font-bold text-slate-900">Monthly Statement for {MONTHS[selectedMonth]} {selectedYear}</h2>
+            <p className="text-xs text-slate-500">Summary of all printing jobs, customer billings, and operational expenses.</p>
+          </div>
+
+          {/* KPI Analytics Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+            <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
+              <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Gross Invoiced</span>
+                <TrendingUp className="w-4 h-4 text-slate-400" />
+              </CardHeader>
+              <CardContent className="py-2 px-4">
+                <div className="text-xl font-black text-slate-900">{currencySymbol}{totalInvoiced.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                <p className="text-[10.5px] text-slate-400 mt-1 font-semibold">{activeOrders.length} print jobs booked</p>
+              </CardContent>
+            </Card>
+
+            <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
+              <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
+                <span className="text-xs font-bold text-emerald-500 uppercase tracking-wider">Realized Cash</span>
+                <DollarSign className="w-4 h-4 text-emerald-400" />
+              </CardHeader>
+              <CardContent className="py-2 px-4">
+                <div className="text-xl font-black text-emerald-600">{currencySymbol}{totalCollected.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                <p className="text-[10.5px] text-emerald-500/80 mt-1 font-semibold">Payments received</p>
+              </CardContent>
+            </Card>
+
+            <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
+              <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
+                <span className="text-xs font-bold text-amber-500 uppercase tracking-wider">Receivables</span>
+                <Receipt className="w-4 h-4 text-amber-400" />
+              </CardHeader>
+              <CardContent className="py-2 px-4">
+                <div className="text-xl font-black text-amber-600">{currencySymbol}{totalOutstanding.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                <p className="text-[10.5px] text-amber-500/80 mt-1 font-semibold">Outstanding balance</p>
+              </CardContent>
+            </Card>
+
+            <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
+              <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
+                <span className="text-xs font-bold text-rose-500 uppercase tracking-wider">Expenditures</span>
+                <TrendingDown className="w-4 h-4 text-rose-400" />
+              </CardHeader>
+              <CardContent className="py-2 px-4">
+                <div className="text-xl font-black text-rose-600">{currencySymbol}{totalExpenses.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                <p className="text-[10.5px] text-rose-500/80 mt-1 font-semibold">{monthlyExpenses.length} receipts recorded</p>
+              </CardContent>
+            </Card>
+
+            <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
+              <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Accrued Margin</span>
+                <BarChart3 className="w-4 h-4 text-slate-400" />
+              </CardHeader>
+              <CardContent className="py-2 px-4">
+                <div className={cn(
+                  "text-xl font-black",
+                  accrualNetProfit >= 0 ? "text-blue-600" : "text-rose-600"
+                )}>
+                  {accrualNetProfit < 0 ? '-' : ''}{currencySymbol}{Math.abs(accrualNetProfit).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                </div>
+                <p className="text-[10.5px] text-slate-400 mt-1 font-semibold font-bold">Billing - Cost</p>
+              </CardContent>
+            </Card>
+
+            <Card className={cn(
+              "shadow-sm border-slate-200 print:shadow-none print:border-slate-300",
+              cashNetProfit >= 0 ? "bg-emerald-50/20 border-emerald-100" : "bg-rose-50/20 border-rose-100"
+            )}>
+              <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
+                <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Net Cash Profit</span>
+                <div className={cn(
+                  "w-2 h-2 rounded-full",
+                  cashNetProfit >= 0 ? "bg-emerald-500 animate-pulse" : "bg-rose-500"
+                )} />
+              </CardHeader>
+              <CardContent className="py-2 px-4">
+                <div className={cn(
+                  "text-xl font-black",
+                  cashNetProfit >= 0 ? "text-emerald-700" : "text-rose-700"
+                )}>
+                  {cashNetProfit < 0 ? '-' : ''}{currencySymbol}{Math.abs(cashNetProfit).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                </div>
+                <p className="text-[10.5px] text-slate-500 mt-1 font-semibold">Realized cash margin</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Performance Daily Chart (Interactive print adaptive) */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <Card className="lg:col-span-2 shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider">Transaction Activity Graph</CardTitle>
+                <CardDescription>Visualizing daily billings and spend across the month.</CardDescription>
+              </CardHeader>
+              <CardContent className="mt-2 h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={dailyChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="colorInv" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2}/>
+                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                      </linearGradient>
+                      <linearGradient id="colorExp" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2}/>
+                        <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="day" tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#94a3b8' }} />
+                    <YAxis tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#94a3b8' }} />
+                    <Tooltip 
+                      contentStyle={{ background: '#fff', borderRadius: 8, border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}
+                      formatter={(val: number) => [`${currencySymbol}${val.toLocaleString()}`]}
+                    />
+                    <Area type="monotone" dataKey="Invoiced" stroke="#3b82f6" strokeWidth={2.5} fillOpacity={1} fill="url(#colorInv)" name="Gross Job Billing" />
+                    <Area type="monotone" dataKey="Expenses" stroke="#ef4444" strokeWidth={2.5} fillOpacity={1} fill="url(#colorExp)" name="Operating Expenditures" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            {/* Expenditure Category Weightings */}
+            <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider">Costs Breakdown</CardTitle>
+                <CardDescription>Detailed classification of expenses.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {monthlyExpenses.length === 0 ? (
+                  <div className="h-48 flex items-center justify-center text-xs font-medium text-slate-400">
+                    No operating expenses logged this month.
+                  </div>
+                ) : (
+                  <div className="space-y-3.5 pt-2">
+                    {Object.entries(expensesByCategory).map(([category, amount]) => {
+                      const percentage = totalExpenses > 0 ? (amount / totalExpenses) * 100 : 0;
+                      return (
+                        <div key={category} className="space-y-1">
+                          <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-500">
+                            <span className="capitalize">{category}</span>
+                            <span className="text-slate-800 font-bold">{currencySymbol}{amount.toLocaleString(undefined, {minimumFractionDigits:2})} ({percentage.toFixed(0)}%)</span>
+                          </div>
+                          <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                            <div 
+                              className="h-full bg-rose-500 rounded-full" 
+                              style={{ width: `${percentage}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-slate-800">
+                      <span>Total Registered Operating Costs:</span>
+                      <span className="text-rose-600 text-sm mt-0.5">{currencySymbol}{totalExpenses.toLocaleString(undefined, {minimumFractionDigits:2})}</span>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Section: Works Ledger */}
+          <Card className="shadow-sm border-slate-100 print:shadow-none print:border-slate-300 break-after-page">
+            <CardHeader className="py-4 px-6 border-b border-slate-100 flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="text-sm font-black text-slate-900 uppercase tracking-wider">Monthly Works Ledger</CardTitle>
+                <CardDescription className="print:hidden">Chronological index of all orders created and processed.</CardDescription>
+              </div>
+              <Badge className="bg-blue-50 text-blue-600 border border-blue-200 font-medium">{monthlyOrders.length} Invoices</Badge>
+            </CardHeader>
+            <CardContent className="p-0 overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-slate-50/50">
+                    <TableHead className="w-[100px] text-[10px] font-bold text-slate-400 tracking-wider">INVOICE</TableHead>
+                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">DATE</TableHead>
+                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">CLIENT</TableHead>
+                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">DESCRIPTION DETAILS</TableHead>
+                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">STATUS</TableHead>
+                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">PAYMENT</TableHead>
+                    <TableHead className="text-right text-[10px] font-bold text-slate-400 tracking-wider">TOTAL VALUE</TableHead>
+                    <TableHead className="text-right text-[10px] font-bold text-slate-400 tracking-wider">CASH RECVD</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {monthlyOrders.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={8} className="h-24 text-center text-slate-400 text-xs font-semibold">
+                        No orders registered in this period.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    monthlyOrders.map((o) => (
+                      <TableRow key={o.id} className="hover:bg-slate-50/20">
+                        <TableCell className="font-mono text-xs text-slate-800 font-black">
+                          {o.invoiceNumber || `#${o.id?.slice(-6).toUpperCase()}`}
+                        </TableCell>
+                        <TableCell className="text-xs text-slate-500 whitespace-nowrap">
+                          {format(getOrderDate(o), 'MMM d, yyyy')}
+                        </TableCell>
+                        <TableCell className="text-xs font-semibold text-slate-900">
+                          {o.customerName}
+                        </TableCell>
+                        <TableCell className="text-xs text-slate-600 max-w-[200px] truncate">
+                          {o.items?.map(i => i.description).join(', ') || 'Custom Job'}
+                        </TableCell>
+                        <TableCell>
+                          {getStatusBadge(o.status)}
+                        </TableCell>
+                        <TableCell>
+                          {getPaymentBadge(o.paymentStatus)}
+                        </TableCell>
+                        <TableCell className="text-right text-xs font-semibold text-slate-900">
+                          {currencySymbol}{o.totalAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                        </TableCell>
+                        <TableCell className="text-right text-xs font-bold text-emerald-600">
+                          {currencySymbol}{o.paidAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                  {monthlyOrders.length > 0 && (
+                    <TableRow className="bg-slate-50/30 font-bold border-t border-slate-200">
+                      <TableCell colSpan={4} className="text-xs text-slate-900 text-right">Running Total (Excludes Cancelled): All Active Billings</TableCell>
+                      <TableCell colSpan={2} />
+                      <TableCell className="text-right text-xs text-slate-900 font-extrabold font-black">
+                        {currencySymbol}{totalInvoiced.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                      </TableCell>
+                      <TableCell className="text-right text-xs text-emerald-600 font-black">
+                        {currencySymbol}{totalCollected.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
+          {/* Section: Expenditures Ledger */}
+          <Card className="shadow-sm border-slate-100 print:shadow-none print:border-slate-300">
+            <CardHeader className="py-4 px-6 border-b border-slate-100 flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="text-sm font-black text-slate-900 uppercase tracking-wider">Costs and Expenditures</CardTitle>
+                <CardDescription className="print:hidden font-medium text-xs">Ledger log of all expenditures filed across the shop.</CardDescription>
+              </div>
+              <Badge className="bg-rose-50 text-rose-600 border border-rose-200 font-medium">{monthlyExpenses.length} Receipts</Badge>
+            </CardHeader>
+            <CardContent className="p-0 overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-slate-50/50">
+                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">DATE</TableHead>
+                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">PARTICULARS DESCRIPTION</TableHead>
+                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">CLASSIFICATION CATEGORY</TableHead>
+                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">CREATED BY</TableHead>
+                    <TableHead className="text-right text-[10px] font-bold text-slate-400 tracking-wider font-semibold">COST VALUE</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {monthlyExpenses.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="h-24 text-center text-slate-400 text-xs font-semibold">
+                        No expenses registered during this statement.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    monthlyExpenses.map((e) => (
+                      <TableRow key={e.id} className="hover:bg-slate-50/20">
+                        <TableCell className="text-xs text-slate-500 whitespace-nowrap">
+                          {format(getExpenseDate(e), 'MMM d, yyyy')}
+                        </TableCell>
+                        <TableCell className="text-xs font-semibold text-slate-900">
+                          {e.description || 'General Operational Expense'}
+                        </TableCell>
+                        <TableCell className="text-xs font-semibold capitalize text-slate-500">
+                          {e.category}
+                        </TableCell>
+                        <TableCell className="text-xs text-slate-500">
+                          {e.createdBy === user.uid ? 'Me' : 'Staff Member'}
+                        </TableCell>
+                        <TableCell className="text-right text-xs font-black text-rose-600">
+                          {currencySymbol}{e.amount.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                  {monthlyExpenses.length > 0 && (
+                    <TableRow className="bg-slate-50/30 font-bold border-t border-slate-200">
+                      <TableCell colSpan={4} className="text-xs text-slate-900 text-right font-bold">Total Operating Expenditure Costs:</TableCell>
+                      <TableCell className="text-right text-xs text-rose-600 font-black font-semibold">
+                        {currencySymbol}{totalExpenses.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
+          {/* Printable Authorization Footnotes */}
+          <div className="hidden print:grid grid-cols-2 gap-12 pt-16 border-t border-slate-200 mt-12 text-center text-xs text-slate-500">
+            <div className="space-y-4">
+              <div className="h-10 border-b border-dashed border-slate-300 w-3/4 mx-auto" />
+              <p className="font-semibold text-slate-700">Client / Store Manager Signature</p>
+              <p className="text-[10px] text-slate-400">Date: ____ / ____ / ________</p>
+            </div>
+            <div className="space-y-4">
+              <div className="h-10 border-b border-dashed border-slate-300 w-3/4 mx-auto" />
+              <p className="font-semibold text-slate-700">Accounts Department Sign-Off</p>
+              <p className="text-[10px] text-slate-400">Date: ____ / ____ / ________</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

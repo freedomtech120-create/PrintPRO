@@ -82,7 +82,11 @@ service cloud.firestore {
       return data.tenantId is string && data.tenantId.size() <= 128
         && data.name is string && data.name.size() <= 100
         && data.invoicePrefix is string && data.invoicePrefix.size() <= 10
-        && data.nextInvoiceNumber is number;
+        && data.nextInvoiceNumber is number
+        && (!('googleSheetId' in data) || data.googleSheetId == null || (data.googleSheetId is string && data.googleSheetId.size() <= 128))
+        && (!('googleSheetUrl' in data) || data.googleSheetUrl == null || (data.googleSheetUrl is string && data.googleSheetUrl.size() <= 500))
+        && (!('googleSheetsLastSyncedAt' in data) || data.googleSheetsLastSyncedAt == null || (data.googleSheetsLastSyncedAt is string && data.googleSheetsLastSyncedAt.size() <= 100))
+        && (!('googleSheetsAutoSync' in data) || data.googleSheetsAutoSync == null || data.googleSheetsAutoSync is bool);
     }
 
     // --- Collection Rules ---
@@ -160,7 +164,7 @@ service cloud.firestore {
       allow create: if isOwner(tenantId) && isEmailVerified() && isValidSettings(incoming())
         && incoming().tenantId == tenantId;
       allow update: if (isOwner(tenantId) && isEmailVerified() && isValidSettings(incoming()) && (
-        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'address', 'phone', 'email', 'website', 'invoicePrefix', 'nextInvoiceNumber', 'currencyCode', 'currencySymbol', 'smsProvider', 'smsApiKey', 'smsSenderId', 'logoUrl'])
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'address', 'phone', 'email', 'website', 'invoicePrefix', 'nextInvoiceNumber', 'currencyCode', 'currencySymbol', 'smsProvider', 'smsApiKey', 'smsSenderId', 'logoUrl', 'googleSheetId', 'googleSheetUrl', 'googleSheetsLastSyncedAt', 'googleSheetsAutoSync'])
       )) || isAdmin();
     }
 

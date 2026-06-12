@@ -97,4 +97,8 @@ export interface BusinessSettings {
   smsApiKey?: string;
   smsSenderId?: string;
   logoUrl?: string;
+  googleSheetId?: string;
+  googleSheetUrl?: string;
+  googleSheetsLastSyncedAt?: string;
+  googleSheetsAutoSync?: boolean;
 }
