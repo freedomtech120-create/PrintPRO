@@ -67,7 +67,10 @@ import {
   signInWithPopup, 
   GoogleAuthProvider, 
   signOut,
-  User 
+  User,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updateProfile
 } from 'firebase/auth';
 import { 
   collection, 
@@ -746,10 +749,16 @@ export default function App() {
   const isSubActive = tenant?.subscriptionExpiresAt && typeof tenant.subscriptionExpiresAt.toDate === 'function' 
     ? isAfter(tenant.subscriptionExpiresAt.toDate(), new Date()) 
     : false;
+
+  const isPendingApproval = tenant?.subscriptionStatus === 'pending_approval';
+
+  const trialDaysLeft = tenant?.trialExpiresAt && typeof tenant.trialExpiresAt.toDate === 'function'
+    ? Math.max(0, Math.ceil((tenant.trialExpiresAt.toDate().getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)))
+    : 0;
   
-  // A user is restricted if they are NOT an admin AND (Not Approved OR both trial and sub are expired)
+  // A user is restricted if they are NOT an admin AND they don't have an active trial, active subscription, or pending approval
   // Crucially, we wait for tenant to be defined before making this decision to avoid flashing/errors
-  const isRestricted = tenant ? (!tenant.isAdmin && (!tenant.isApproved || (!isTrialActive && !isSubActive))) : false;
+  const isRestricted = tenant ? (!tenant.isAdmin && !isTrialActive && !isSubActive && !isPendingApproval) : false;
 
   if (user && !tenant && !loading) {
     return (
@@ -875,6 +884,18 @@ export default function App() {
             <h2 className="text-lg font-semibold text-slate-800 capitalize">{activeTab}</h2>
           </div>
           <div className="flex items-center gap-3">
+            {tenant?.subscriptionStatus === 'pending_approval' && (
+              <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 gap-1.5 py-1 px-3 animate-pulse">
+                <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                Payment Pending Approval
+              </Badge>
+            )}
+            {tenant?.subscriptionStatus === 'trial' && isTrialActive && (
+              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 gap-1.5 py-1 px-3">
+                <div className="w-1.5 h-1.5 rounded-full bg-blue-600" />
+                {trialDaysLeft} Days Trial Left
+              </Badge>
+            )}
             {!isOnline && (
               <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 gap-1.5 py-1 px-3">
                 <div className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
@@ -1236,6 +1257,124 @@ function MessagingView({ customers, settings }: { customers: Customer[], setting
 // --- Marketing Components ---
 
 function LandingPage({ onLogin, platformSettings }: { onLogin: () => void, platformSettings: PlatformSettings | null }) {
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authTab, setAuthTab] = useState<'login' | 'register'>('register');
+
+  // Form states
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [ownerName, setOwnerName] = useState('');
+  const [companyName, setCompanyName] = useState('');
+  const [businessPhone, setBusinessPhone] = useState('');
+  const [businessAddress, setBusinessAddress] = useState('');
+  const [businessType, setBusinessType] = useState('Digital Printing');
+  const [currency, setCurrency] = useState('GHS_GH₵');
+
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleGetStartedClick = (tab: 'register' | 'login') => {
+    setAuthTab(tab);
+    setIsAuthModalOpen(true);
+    setAuthError(null);
+  };
+
+  const handleLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    setAuthError(null);
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+    } catch (err: any) {
+      console.error("Login error:", err);
+      let msg = "Failed to sign in. Please check your credentials.";
+      if (err?.code === 'auth/user-not-found' || err?.code === 'auth/wrong-password') {
+        msg = "Incorrect email or password.";
+      } else if (err?.code === 'auth/invalid-email') {
+        msg = "Please enter a valid email address.";
+      }
+      setAuthError(msg);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !password || !confirmPassword || !ownerName || !companyName || !businessPhone) {
+      setAuthError("All fields marked with * are required.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setAuthError("Passwords do not match.");
+      return;
+    }
+    if (password.length < 6) {
+      setAuthError("Password must be at least 6 characters long.");
+      return;
+    }
+    setIsSubmitting(true);
+    setAuthError(null);
+
+    const [currencyCode, currencySymbol] = currency.split('_');
+
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const u = userCredential.user;
+
+      // Set Display Name to owner name
+      await updateProfile(u, { displayName: ownerName });
+
+      // Create Tenant document
+      const tenantRef = doc(db, 'tenants', u.uid);
+      const newTenant = {
+        id: u.uid,
+        email: email,
+        name: companyName,
+        photoURL: null,
+        createdAt: serverTimestamp(),
+        isAdmin: email === ADMIN_EMAIL,
+        trialExpiresAt: Timestamp.fromDate(addDays(new Date(), 5)),
+        isApproved: true, // Pre-approve registration so they can trial immediately
+        subscriptionStatus: 'trial',
+        phone: businessPhone,
+        address: businessAddress,
+        industry: businessType
+      };
+      await setDoc(tenantRef, newTenant);
+
+      // Create Settings document
+      const settingsRef = doc(db, 'settings', u.uid);
+      const newSettings = {
+        tenantId: u.uid,
+        name: companyName,
+        address: businessAddress,
+        phone: businessPhone,
+        email: email,
+        website: '',
+        invoicePrefix: 'INV-',
+        nextInvoiceNumber: 1001,
+        currencyCode: currencyCode,
+        currencySymbol: currencySymbol
+      };
+      await setDoc(settingsRef, newSettings);
+
+      setIsAuthModalOpen(false);
+    } catch (err: any) {
+      console.error("Registration error:", err);
+      let msg = err?.message || "Failed to create company account. Please try again.";
+      if (err?.code === 'auth/email-already-in-use') {
+        msg = "This email address is already in use.";
+      } else if (err?.code === 'auth/weak-password') {
+        msg = "Password is too weak. Please use a stronger password.";
+      }
+      setAuthError(msg);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-white font-sans selection:bg-blue-100 selection:text-blue-700">
       {/* Navigation */}
@@ -1253,9 +1392,14 @@ function LandingPage({ onLogin, platformSettings }: { onLogin: () => void, platf
             <a href="#about" className="hover:text-blue-600 transition-colors">About</a>
             <a href="#contact" className="hover:text-blue-600 transition-colors">Contact</a>
           </div>
-          <Button onClick={onLogin} className="bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-200">
-            Get Started
-          </Button>
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" onClick={() => handleGetStartedClick('login')} className="text-slate-600 hover:text-blue-600 text-sm font-semibold hidden sm:inline-flex">
+              Sign In
+            </Button>
+            <Button onClick={() => handleGetStartedClick('register')} className="bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-200 font-semibold">
+              Get Started
+            </Button>
+          </div>
         </div>
       </nav>
 
@@ -1278,12 +1422,12 @@ function LandingPage({ onLogin, platformSettings }: { onLogin: () => void, platf
                 PrintPro Manager simplifies order tracking, customer relationships, and business analytics. Built specifically for modern print houses and large-format businesses.
               </p>
               <div className="flex flex-col sm:flex-row gap-4">
-                <Button onClick={onLogin} className="h-14 px-8 text-lg font-bold bg-blue-600 hover:bg-blue-700 shadow-xl shadow-blue-100 group">
-                  Sign in with Google
+                <Button onClick={() => handleGetStartedClick('register')} className="h-14 px-8 text-lg font-bold bg-blue-600 hover:bg-blue-700 shadow-xl shadow-blue-100 group">
+                  Get Started (Free Trial)
                   <ChevronRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
                 </Button>
-                <Button variant="outline" className="h-14 px-8 text-lg font-bold border-slate-200 hover:bg-slate-50">
-                  View Demo
+                <Button variant="outline" onClick={() => handleGetStartedClick('login')} className="h-14 px-8 text-lg font-bold border-slate-200 hover:bg-slate-50">
+                  Sign In
                 </Button>
               </div>
               <div className="mt-10 flex items-center gap-4 py-4 px-6 bg-slate-50 rounded-2xl w-fit">
@@ -1393,7 +1537,7 @@ function LandingPage({ onLogin, platformSettings }: { onLogin: () => void, platf
                   </ul>
                   
                   <Button 
-                    onClick={onLogin} 
+                    onClick={() => handleGetStartedClick('register')} 
                     className={cn(
                       "w-full h-14 text-sm font-bold shadow-lg", 
                       plan.highlight ? "bg-blue-600 hover:bg-blue-700 shadow-blue-500/20" : "bg-slate-900 hover:bg-slate-800 text-white"
@@ -1536,8 +1680,8 @@ function LandingPage({ onLogin, platformSettings }: { onLogin: () => void, platf
             <div className="space-y-6">
               <h4 className="text-lg font-bold">Ready to Start?</h4>
               <p className="text-slate-400 text-sm">Join the 50+ businesses scaling their printing operations today.</p>
-              <Button onClick={onLogin} className="w-full bg-blue-600 hover:bg-blue-700 h-12 font-bold shadow-lg shadow-blue-500/20 group">
-                Sign in with Google
+              <Button onClick={() => handleGetStartedClick('register')} className="w-full bg-blue-600 hover:bg-blue-700 h-12 font-bold shadow-lg shadow-blue-500/20 group">
+                Create Account
                 <ExternalLink className="w-4 h-4 ml-2 opacity-60 group-hover:opacity-100 transition-opacity" />
               </Button>
             </div>
@@ -1553,6 +1697,233 @@ function LandingPage({ onLogin, platformSettings }: { onLogin: () => void, platf
           </div>
         </div>
       </footer>
+
+      {/* Modern Authentication & Business Registration Dialog */}
+      <Dialog open={isAuthModalOpen} onOpenChange={(open) => { setIsAuthModalOpen(open); setAuthError(null); }}>
+        <DialogContent className="sm:max-w-lg bg-white p-0 overflow-hidden max-h-[90vh] flex flex-col rounded-2xl border-none shadow-2xl">
+          <div className="bg-gradient-to-r from-blue-600 to-indigo-700 p-6 text-white shrink-0">
+            <DialogHeader className="text-left">
+              <DialogTitle className="text-2xl font-black tracking-tight text-white flex items-center gap-2">
+                <Printer className="w-6 h-6 text-blue-200" />
+                {authTab === 'register' ? 'Register Your Company' : 'Welcome Back'}
+              </DialogTitle>
+              <DialogDescription className="text-blue-100 mt-1.5 text-sm">
+                {authTab === 'register' 
+                  ? 'Set up your printing shop in 60 seconds. Start your 5-day free trial.' 
+                  : 'Sign in to access your print house command center.'}
+              </DialogDescription>
+            </DialogHeader>
+          </div>
+
+          <div className="overflow-y-auto p-6 flex-1 space-y-4">
+            <Tabs value={authTab} onValueChange={(val: any) => { setAuthTab(val); setAuthError(null); }} className="w-full">
+              <TabsList className="grid w-full grid-cols-2 mb-4 bg-slate-100 p-1 rounded-xl">
+                <TabsTrigger value="register" className="font-semibold text-sm rounded-lg py-2 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm">Register Company</TabsTrigger>
+                <TabsTrigger value="login" className="font-semibold text-sm rounded-lg py-2 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm">Existing Sign In</TabsTrigger>
+              </TabsList>
+
+              {authError && (
+                <div className="p-3.5 rounded-xl bg-red-50 border border-red-100 flex items-center gap-2 text-red-700 text-xs font-semibold animate-in fade-in duration-200">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{authError}</span>
+                </div>
+              )}
+
+              <TabsContent value="register">
+                <form onSubmit={handleRegisterSubmit} className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-700">Owner Name *</label>
+                      <Input 
+                        placeholder="John Doe" 
+                        value={ownerName} 
+                        onChange={(e) => setOwnerName(e.target.value)} 
+                        required 
+                        className="bg-slate-50 border-slate-200 focus-visible:ring-blue-500"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-700">Company Name *</label>
+                      <Input 
+                        placeholder="Apex Prints Ltd" 
+                        value={companyName} 
+                        onChange={(e) => setCompanyName(e.target.value)} 
+                        required 
+                        className="bg-slate-50 border-slate-200 focus-visible:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-700">Business Email *</label>
+                      <Input 
+                        type="email" 
+                        placeholder="owner@company.com" 
+                        value={email} 
+                        onChange={(e) => setEmail(e.target.value)} 
+                        required 
+                        className="bg-slate-50 border-slate-200 focus-visible:ring-blue-500"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-700">Phone Number *</label>
+                      <Input 
+                        placeholder="+233 24 123 4567" 
+                        value={businessPhone} 
+                        onChange={(e) => setBusinessPhone(e.target.value)} 
+                        required 
+                        className="bg-slate-50 border-slate-200 focus-visible:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-slate-700">Business Address</label>
+                    <Input 
+                      placeholder="Ring Road Central, Accra, Ghana" 
+                      value={businessAddress} 
+                      onChange={(e) => setBusinessAddress(e.target.value)} 
+                      className="bg-slate-50 border-slate-200 focus-visible:ring-blue-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-700">Business Type</label>
+                      <Select value={businessType} onValueChange={setBusinessType}>
+                        <SelectTrigger className="bg-slate-50 border-slate-200 focus:ring-blue-500">
+                          <SelectValue placeholder="Select type" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-white">
+                          <SelectItem value="Digital Printing">Digital Printing</SelectItem>
+                          <SelectItem value="Offset Printing">Offset Printing</SelectItem>
+                          <SelectItem value="Large Format Printing">Large Format Printing</SelectItem>
+                          <SelectItem value="Graphic Design">Graphic Design</SelectItem>
+                          <SelectItem value="Other">Other Type</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-700">Operating Currency</label>
+                      <Select value={currency} onValueChange={setCurrency}>
+                        <SelectTrigger className="bg-slate-50 border-slate-200 focus:ring-blue-500">
+                          <SelectValue placeholder="Select currency" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-white">
+                          <SelectItem value="GHS_GH₵">Ghana Cedis (GH₵)</SelectItem>
+                          <SelectItem value="USD_$">US Dollar ($)</SelectItem>
+                          <SelectItem value="NGN_₦">Nigerian Naira (₦)</SelectItem>
+                          <SelectItem value="GBP_£">British Pound (£)</SelectItem>
+                          <SelectItem value="EUR_€">Euro (€)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-700">Password *</label>
+                      <Input 
+                        type="password" 
+                        placeholder="••••••••" 
+                        value={password} 
+                        onChange={(e) => setPassword(e.target.value)} 
+                        required 
+                        className="bg-slate-50 border-slate-200 focus-visible:ring-blue-500"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-700">Confirm Password *</label>
+                      <Input 
+                        type="password" 
+                        placeholder="••••••••" 
+                        value={confirmPassword} 
+                        onChange={(e) => setConfirmPassword(e.target.value)} 
+                        required 
+                        className="bg-slate-50 border-slate-200 focus-visible:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <Button type="submit" disabled={isSubmitting} className="w-full bg-blue-600 hover:bg-blue-700 h-11 text-sm font-semibold text-white mt-2">
+                    {isSubmitting ? (
+                      <div className="flex items-center gap-2">
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        Creating Account...
+                      </div>
+                    ) : 'Register & Start Trial'}
+                  </Button>
+                </form>
+              </TabsContent>
+
+              <TabsContent value="login">
+                <form onSubmit={handleLoginSubmit} className="space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-slate-700">Email Address</label>
+                    <Input 
+                      type="email" 
+                      placeholder="you@example.com" 
+                      value={email} 
+                      onChange={(e) => setEmail(e.target.value)} 
+                      required 
+                      className="bg-slate-50 border-slate-200 focus-visible:ring-blue-500"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between items-center">
+                      <label className="text-xs font-bold text-slate-700">Password</label>
+                    </div>
+                    <Input 
+                      type="password" 
+                      placeholder="••••••••" 
+                      value={password} 
+                      onChange={(e) => setPassword(e.target.value)} 
+                      required 
+                      className="bg-slate-50 border-slate-200 focus-visible:ring-blue-500"
+                    />
+                  </div>
+
+                  <Button type="submit" disabled={isSubmitting} className="w-full bg-blue-600 hover:bg-blue-700 h-11 text-sm font-semibold text-white mt-2">
+                    {isSubmitting ? (
+                      <div className="flex items-center gap-2">
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        Signing in...
+                      </div>
+                    ) : 'Sign In'}
+                  </Button>
+                </form>
+              </TabsContent>
+            </Tabs>
+
+            <div className="relative flex py-2 items-center">
+              <div className="flex-grow border-t border-slate-200"></div>
+              <span className="flex-shrink mx-4 text-slate-400 text-xs font-bold uppercase">Or Use Google</span>
+              <div className="flex-grow border-t border-slate-200"></div>
+            </div>
+
+            <Button 
+              type="button" 
+              variant="outline" 
+              onClick={async () => {
+                setIsAuthModalOpen(false);
+                await onLogin();
+              }} 
+              className="w-full border-slate-200 hover:bg-slate-50 h-11 text-sm font-semibold flex items-center justify-center gap-2"
+            >
+              <svg className="w-4 h-4 mr-1" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" stroke="none" />
+              </svg>
+              Sign In with Google
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -2372,12 +2743,19 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
     }
   };
 
-  const handleDeleteOrder = async (orderId: string) => {
-    if (!confirm('Are you sure you want to delete this order? This action cannot be undone.')) return;
+  const [deleteOrderId, setDeleteOrderId] = useState<string | null>(null);
+
+  const handleDeleteOrder = (orderId: string) => {
+    setDeleteOrderId(orderId);
+  };
+
+  const executeDeleteOrder = async () => {
+    if (!deleteOrderId) return;
     try {
-      await deleteDoc(doc(db, 'orders', orderId));
+      await deleteDoc(doc(db, 'orders', deleteOrderId));
+      setDeleteOrderId(null);
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `orders/${orderId}`);
+      handleFirestoreError(error, OperationType.DELETE, `orders/${deleteOrderId}`);
     }
   };
 
@@ -3030,6 +3408,28 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
           </div>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={deleteOrderId !== null} onOpenChange={(open) => { if (!open) setDeleteOrderId(null); }}>
+        <DialogContent className="sm:max-w-md bg-white">
+          <DialogHeader>
+            <DialogTitle className="text-slate-900 flex items-center gap-2 font-bold text-lg">
+              <AlertCircle className="w-5 h-5 text-red-600" />
+              Confirm Deletion
+            </DialogTitle>
+            <DialogDescription className="text-slate-500 pt-2 text-sm leading-relaxed">
+              Are you sure you want to delete this order? This action is permanent and cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex gap-3 justify-end pt-4 border-t border-slate-100 mt-4">
+            <Button variant="outline" onClick={() => setDeleteOrderId(null)} className="font-semibold">
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={executeDeleteOrder} className="font-semibold bg-red-600 hover:bg-red-700 text-white">
+              Delete Order
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -3037,6 +3437,7 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
 function ProductsView({ products, settings, user }: { products: Product[], settings: BusinessSettings | null, user: User }) {
   const [isNewProductOpen, setIsNewProductOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deleteProductId, setDeleteProductId] = useState<string | null>(null);
 
   const handleAddProduct = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -3060,12 +3461,17 @@ function ProductsView({ products, settings, user }: { products: Product[], setti
     }
   };
 
-  const handleDeleteProduct = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this product?')) return;
+  const handleDeleteProduct = (id: string) => {
+    setDeleteProductId(id);
+  };
+
+  const executeDeleteProduct = async () => {
+    if (!deleteProductId) return;
     try {
-      await deleteDoc(doc(db, 'products', id));
+      await deleteDoc(doc(db, 'products', deleteProductId));
+      setDeleteProductId(null);
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `products/${id}`);
+      handleFirestoreError(error, OperationType.DELETE, `products/${deleteProductId}`);
     }
   };
 
@@ -3134,6 +3540,28 @@ function ProductsView({ products, settings, user }: { products: Product[], setti
           </Card>
         ))}
       </div>
+
+      <Dialog open={deleteProductId !== null} onOpenChange={(open) => { if (!open) setDeleteProductId(null); }}>
+        <DialogContent className="sm:max-w-md bg-white">
+          <DialogHeader>
+            <DialogTitle className="text-slate-900 flex items-center gap-2 font-bold text-lg">
+              <AlertCircle className="w-5 h-5 text-red-600" />
+              Confirm Deletion
+            </DialogTitle>
+            <DialogDescription className="text-slate-500 pt-2 text-sm leading-relaxed">
+              Are you sure you want to delete this product? This action is permanent and cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex gap-3 justify-end pt-4 border-t border-slate-100 mt-4">
+            <Button variant="outline" onClick={() => setDeleteProductId(null)} className="font-semibold">
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={executeDeleteProduct} className="font-semibold bg-red-600 hover:bg-red-700 text-white">
+              Delete Product
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -3141,6 +3569,7 @@ function ProductsView({ products, settings, user }: { products: Product[], setti
 function ExpensesView({ expenses, settings, user }: { expenses: Expense[], settings: BusinessSettings | null, user: User }) {
   const [isNewExpenseOpen, setIsNewExpenseOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deleteExpenseId, setDeleteExpenseId] = useState<string | null>(null);
 
   const handleAddExpense = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -3166,12 +3595,17 @@ function ExpensesView({ expenses, settings, user }: { expenses: Expense[], setti
     }
   };
 
-  const handleDeleteExpense = async (expenseId: string) => {
-    if (!confirm('Are you sure you want to delete this expense? This action cannot be undone.')) return;
+  const handleDeleteExpense = (expenseId: string) => {
+    setDeleteExpenseId(expenseId);
+  };
+
+  const executeDeleteExpense = async () => {
+    if (!deleteExpenseId) return;
     try {
-      await deleteDoc(doc(db, 'expenses', expenseId));
+      await deleteDoc(doc(db, 'expenses', deleteExpenseId));
+      setDeleteExpenseId(null);
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `expenses/${expenseId}`);
+      handleFirestoreError(error, OperationType.DELETE, `expenses/${deleteExpenseId}`);
     }
   };
 
@@ -3267,6 +3701,28 @@ function ExpensesView({ expenses, settings, user }: { expenses: Expense[], setti
           </Table>
         </CardContent>
       </Card>
+
+      <Dialog open={deleteExpenseId !== null} onOpenChange={(open) => { if (!open) setDeleteExpenseId(null); }}>
+        <DialogContent className="sm:max-w-md bg-white">
+          <DialogHeader>
+            <DialogTitle className="text-slate-900 flex items-center gap-2 font-bold text-lg">
+              <AlertCircle className="w-5 h-5 text-red-600" />
+              Confirm Deletion
+            </DialogTitle>
+            <DialogDescription className="text-slate-500 pt-2 text-sm leading-relaxed">
+              Are you sure you want to delete this expense? This action is permanent and cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex gap-3 justify-end pt-4 border-t border-slate-100 mt-4">
+            <Button variant="outline" onClick={() => setDeleteExpenseId(null)} className="font-semibold">
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={executeDeleteExpense} className="font-semibold bg-red-600 hover:bg-red-700 text-white">
+              Delete Expense
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -3276,6 +3732,7 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
   const [isBroadcastOpen, setIsBroadcastOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deleteCustomerId, setDeleteCustomerId] = useState<string | null>(null);
 
   const handleAddCustomer = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -3300,12 +3757,17 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
     }
   };
 
-  const handleDeleteCustomer = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this customer? This action cannot be undone.')) return;
+  const handleDeleteCustomer = (id: string) => {
+    setDeleteCustomerId(id);
+  };
+
+  const executeDeleteCustomer = async () => {
+    if (!deleteCustomerId) return;
     try {
-      await deleteDoc(doc(db, 'customers', id));
+      await deleteDoc(doc(db, 'customers', deleteCustomerId));
+      setDeleteCustomerId(null);
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `customers/${id}`);
+      handleFirestoreError(error, OperationType.DELETE, `customers/${deleteCustomerId}`);
     }
   };
 
@@ -3463,6 +3925,28 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
           </Card>
         ))}
       </div>
+
+      <Dialog open={deleteCustomerId !== null} onOpenChange={(open) => { if (!open) setDeleteCustomerId(null); }}>
+        <DialogContent className="sm:max-w-md bg-white">
+          <DialogHeader>
+            <DialogTitle className="text-slate-900 flex items-center gap-2 font-bold text-lg">
+              <AlertCircle className="w-5 h-5 text-red-600" />
+              Confirm Deletion
+            </DialogTitle>
+            <DialogDescription className="text-slate-500 pt-2 text-sm leading-relaxed">
+              Are you sure you want to delete this customer? This action is permanent and cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex gap-3 justify-end pt-4 border-t border-slate-100 mt-4">
+            <Button variant="outline" onClick={() => setDeleteCustomerId(null)} className="font-semibold">
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={executeDeleteCustomer} className="font-semibold bg-red-600 hover:bg-red-700 text-white">
+              Delete Customer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

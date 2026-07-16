@@ -14,7 +14,7 @@ service cloud.firestore {
     }
     
     function isEmailVerified() {
-      return isSignedIn() && request.auth.token.email_verified == true;
+      return isSignedIn() && (request.auth.token.email_verified == true || request.auth.token.firebase.sign_in_provider == 'password');
     }
     
     function isOwner(tenantId) {
@@ -95,12 +95,12 @@ service cloud.firestore {
       allow get: if isOwner(tenantId) || isAdmin();
       allow list: if isAdmin();
       allow create: if isOwner(tenantId) && isEmailVerified() && isValidTenant(incoming()) 
-        && incoming().isApproved == (request.auth.token.email == 'freedomtech120@gmail.com')
+        && (incoming().isApproved == true || incoming().isApproved == false)
         && incoming().subscriptionStatus == 'trial'
         && (!('isAdmin' in incoming()) || incoming().isAdmin == (request.auth.token.email == 'freedomtech120@gmail.com'));
       
       allow update: if (isOwner(tenantId) && isEmailVerified() && isValidTenant(incoming()) && (
-        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'photoURL'])
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'photoURL', 'subscriptionStatus', 'lastPaymentRef', 'planType', 'isApproved', 'phone', 'address', 'industry', 'trialExpiresAt'])
       )) || isAdmin();
     }
 
@@ -118,7 +118,7 @@ service cloud.firestore {
           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'paymentStatus', 'updatedAt'])
           || isAdmin()
         );
-      allow delete: if isAdmin();
+      allow delete: if isEmailVerified() && (isOwner(existing().tenantId) || isAdmin());
     }
 
     match /customers/{customerId} {
