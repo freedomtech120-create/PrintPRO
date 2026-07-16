@@ -435,8 +435,35 @@ export default function App() {
     const provider = new GoogleAuthProvider();
     try {
       await signInWithPopup(auth, provider);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Login failed:", error);
+      const errorCode = error?.code;
+      const errorMessage = error?.message || String(error);
+
+      if (errorCode === 'auth/unauthorized-domain') {
+        const currentDomain = window.location.hostname;
+        alert(
+          `Firebase Authentication Error: Unauthorized Domain!\n\n` +
+          `To enable Google Sign-In on this domain, please follow these steps:\n\n` +
+          `1. Open the Firebase Console (https://console.firebase.google.com/)\n` +
+          `2. Select your project (gen-lang-client-0647954847 or similar)\n` +
+          `3. Go to "Authentication" -> "Settings" -> "Authorized Domains"\n` +
+          `4. Click "Add domain" and enter your current hosting domain: ${currentDomain}\n` +
+          `5. Save and refresh this page. Google Login will work immediately!`
+        );
+      } else if (errorCode === 'auth/popup-blocked') {
+        alert(
+          `Login Failed: Pop-up blocked!\n\n` +
+          `Your browser blocked the Google Sign-In pop-up. Please allow pop-ups for this site or try again.`
+        );
+      } else if (errorCode === 'auth/popup-closed-by-user') {
+        alert(`Login was cancelled because the sign-in window was closed before completion.`);
+      } else {
+        alert(
+          `Sign-in failed: ${errorMessage}\n\n` +
+          `Code: ${errorCode || 'unknown'}`
+        );
+      }
     }
   };
 
@@ -2345,6 +2372,15 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
     }
   };
 
+  const handleDeleteOrder = async (orderId: string) => {
+    if (!confirm('Are you sure you want to delete this order? This action cannot be undone.')) return;
+    try {
+      await deleteDoc(doc(db, 'orders', orderId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `orders/${orderId}`);
+    }
+  };
+
   const generateOrderMessage = (order: Order) => {
     const date = order.createdAt instanceof Timestamp ? order.createdAt.toDate() : new Date(order.createdAt);
     let message = `Invoice for ${order.customerName}\nInvoice: ${order.invoiceNumber || '#' + order.id?.slice(-8).toUpperCase()}\nDate: ${format(date, 'MMM d, yyyy')}\n\n`;
@@ -2833,7 +2869,13 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
                       >
                         <Printer className="w-4 h-4" />
                       </Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-red-600">
+                      <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        className="h-8 w-8 text-slate-400 hover:text-red-600"
+                        title="Delete Order"
+                        onClick={() => handleDeleteOrder(order.id!)}
+                      >
                         <Trash2 className="w-4 h-4" />
                       </Button>
                     </div>
@@ -3124,6 +3166,15 @@ function ExpensesView({ expenses, settings, user }: { expenses: Expense[], setti
     }
   };
 
+  const handleDeleteExpense = async (expenseId: string) => {
+    if (!confirm('Are you sure you want to delete this expense? This action cannot be undone.')) return;
+    try {
+      await deleteDoc(doc(db, 'expenses', expenseId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `expenses/${expenseId}`);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -3200,7 +3251,13 @@ function ExpensesView({ expenses, settings, user }: { expenses: Expense[], setti
                     {format(expense.date instanceof Timestamp ? expense.date.toDate() : new Date(expense.date), 'MMM d, yyyy')}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-red-600">
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className="h-8 w-8 text-slate-400 hover:text-red-600"
+                      title="Delete Expense"
+                      onClick={() => handleDeleteExpense(expense.id!)}
+                    >
                       <Trash2 className="w-4 h-4" />
                     </Button>
                   </TableCell>
@@ -3240,6 +3297,15 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
       handleFirestoreError(error, OperationType.CREATE, 'customers');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteCustomer = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this customer? This action cannot be undone.')) return;
+    try {
+      await deleteDoc(doc(db, 'customers', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `customers/${id}`);
     }
   };
 
@@ -3371,8 +3437,14 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
                 <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold">
                   {customer.name.charAt(0).toUpperCase()}
                 </div>
-                <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400">
-                  <Edit className="w-4 h-4" />
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className="h-8 w-8 text-slate-400 hover:text-red-600"
+                  title="Delete Customer"
+                  onClick={() => handleDeleteCustomer(customer.id!)}
+                >
+                  <Trash2 className="w-4 h-4" />
                 </Button>
               </div>
               <CardTitle className="mt-4">{customer.name}</CardTitle>
