@@ -860,7 +860,13 @@ export default function App() {
 
           <div className="p-4 mt-auto border-t border-slate-100">
             <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 mb-4">
-              <img src={user.photoURL || ''} alt={user.displayName || ''} className="w-10 h-10 rounded-full border-2 border-white shadow-sm" />
+              {user.photoURL ? (
+                <img src={user.photoURL} alt={user.displayName || ''} className="w-10 h-10 rounded-full border-2 border-white shadow-sm" />
+              ) : (
+                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold border-2 border-white shadow-sm">
+                  {(user.displayName || user.email || 'U').charAt(0).toUpperCase()}
+                </div>
+              )}
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold text-slate-900 truncate">{user.displayName}</p>
                 <p className="text-xs text-slate-500 truncate">{user.email}</p>
