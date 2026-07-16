@@ -4634,6 +4634,7 @@ function MonthlyReportView({
   const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+  const [reportFilter, setReportFilter] = useState<'all' | 'activities' | 'income' | 'expenses'>('all');
   
   const reportRef = useRef<HTMLDivElement>(null);
 
@@ -4766,6 +4767,36 @@ function MonthlyReportView({
     acc[st] = (acc[st] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
+
+  // Combined activities list (Income & Expenses)
+  const combinedActivities = [
+    ...activeOrders.map(o => ({
+      id: o.id,
+      date: getOrderDate(o),
+      type: 'income',
+      ref: o.invoiceNumber || `#${o.id?.slice(-6).toUpperCase()}`,
+      party: o.customerName,
+      description: o.items?.map(i => i.description).join(', ') || 'Custom Job',
+      status: o.status,
+      paymentStatus: o.paymentStatus,
+      incomeAmount: o.totalAmount || 0,
+      expenseAmount: 0,
+      cashReceived: o.paidAmount || 0,
+    })),
+    ...monthlyExpenses.map(e => ({
+      id: e.id,
+      date: getExpenseDate(e),
+      type: 'expense',
+      ref: `EXP-${e.id?.slice(-4).toUpperCase() || 'LOG'}`,
+      party: 'General Operating',
+      description: e.description || 'Operational Expense',
+      status: 'completed',
+      paymentStatus: 'paid',
+      incomeAmount: 0,
+      expenseAmount: e.amount || 0,
+      cashReceived: 0,
+    }))
+  ].sort((a, b) => a.date.getTime() - b.date.getTime()); // chronological (oldest to newest)
 
   // Render variables
   const currencySymbol = settings?.currencySymbol || 'GH₵';
@@ -4922,6 +4953,68 @@ function MonthlyReportView({
         </div>
       </div>
 
+      {/* Report Filter Tabs (Hidden on Print) */}
+      {!(monthlyOrders.length === 0 && monthlyExpenses.length === 0) && (
+        <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-100 rounded-xl max-w-2xl print:hidden shadow-inner">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className={cn(
+              "flex-1 rounded-lg text-xs font-bold transition-all h-8 whitespace-nowrap",
+              reportFilter === 'all' 
+                ? "bg-white text-slate-900 shadow-sm" 
+                : "text-slate-500 hover:text-slate-800"
+            )}
+            onClick={() => setReportFilter('all')}
+          >
+            Full Report
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className={cn(
+              "flex-1 rounded-lg text-xs font-bold transition-all h-8 whitespace-nowrap",
+              reportFilter === 'activities' 
+                ? "bg-white text-slate-900 shadow-sm" 
+                : "text-slate-500 hover:text-slate-800"
+            )}
+            onClick={() => setReportFilter('activities')}
+          >
+            All Activities Timeline
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className={cn(
+              "flex-1 rounded-lg text-xs font-bold transition-all h-8 whitespace-nowrap",
+              reportFilter === 'income' 
+                ? "bg-white text-slate-900 shadow-sm" 
+                : "text-slate-500 hover:text-slate-800"
+            )}
+            onClick={() => setReportFilter('income')}
+          >
+            Income Ledger
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className={cn(
+              "flex-1 rounded-lg text-xs font-bold transition-all h-8 whitespace-nowrap",
+              reportFilter === 'expenses' 
+                ? "bg-white text-slate-900 shadow-sm" 
+                : "text-slate-500 hover:text-slate-800"
+            )}
+            onClick={() => setReportFilter('expenses')}
+          >
+            Expenditure Ledger
+          </Button>
+        </div>
+      )}
+
       {monthlyOrders.length === 0 && monthlyExpenses.length === 0 ? (
         <div className="flex flex-col items-center justify-center p-16 text-center bg-white border border-slate-200 rounded-3xl shadow-sm">
           <div className="bg-slate-50 p-4 rounded-full mb-4">
@@ -5041,12 +5134,87 @@ function MonthlyReportView({
             </Card>
           </div>
 
-          {/* Performance Daily Chart (Interactive print adaptive) */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <Card className="lg:col-span-2 shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
+          {/* Performance Daily Chart & Costs Breakdown */}
+          {reportFilter === 'all' && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <Card className="lg:col-span-2 shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider">Transaction Activity Graph</CardTitle>
+                  <CardDescription>Visualizing daily billings and spend across the month.</CardDescription>
+                </CardHeader>
+                <CardContent className="mt-2 h-64">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={dailyChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="colorInv" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2}/>
+                          <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                        </linearGradient>
+                        <linearGradient id="colorExp" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2}/>
+                          <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                      <XAxis dataKey="day" tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#94a3b8' }} />
+                      <YAxis tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#94a3b8' }} />
+                      <Tooltip 
+                        contentStyle={{ background: '#fff', borderRadius: 8, border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}
+                        formatter={(val: number) => [`${currencySymbol}${val.toLocaleString()}`]}
+                      />
+                      <Area type="monotone" dataKey="Invoiced" stroke="#3b82f6" strokeWidth={2.5} fillOpacity={1} fill="url(#colorInv)" name="Gross Job Billing" />
+                      <Area type="monotone" dataKey="Expenses" stroke="#ef4444" strokeWidth={2.5} fillOpacity={1} fill="url(#colorExp)" name="Operating Expenditures" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+
+              {/* Expenditure Category Weightings */}
+              <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider">Costs Breakdown</CardTitle>
+                  <CardDescription>Detailed classification of expenses.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {monthlyExpenses.length === 0 ? (
+                    <div className="h-48 flex items-center justify-center text-xs font-medium text-slate-400">
+                      No operating expenses logged this month.
+                    </div>
+                  ) : (
+                    <div className="space-y-3.5 pt-2">
+                      {Object.entries(expensesByCategory).map(([category, amount]) => {
+                        const percentage = totalExpenses > 0 ? (amount / totalExpenses) * 100 : 0;
+                        return (
+                          <div key={category} className="space-y-1">
+                            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-500">
+                              <span className="capitalize">{category}</span>
+                              <span className="text-slate-800 font-bold">{currencySymbol}{amount.toLocaleString(undefined, {minimumFractionDigits:2})} ({percentage.toFixed(0)}%)</span>
+                            </div>
+                            <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-rose-500 rounded-full" 
+                                style={{ width: `${percentage}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-slate-800">
+                        <span>Total Operating Costs:</span>
+                        <span className="text-rose-600 text-sm mt-0.5">{currencySymbol}{totalExpenses.toLocaleString(undefined, {minimumFractionDigits:2})}</span>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
+          {reportFilter === 'activities' && (
+            <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider">Transaction Activity Graph</CardTitle>
-                <CardDescription>Visualizing daily billings and spend across the month.</CardDescription>
+                <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider">Activities Flow Graph</CardTitle>
+                <CardDescription>All billing, collections, and expenses.</CardDescription>
               </CardHeader>
               <CardContent className="mt-2 h-64">
                 <ResponsiveContainer width="100%" height="100%">
@@ -5055,6 +5223,10 @@ function MonthlyReportView({
                       <linearGradient id="colorInv" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2}/>
                         <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                      </linearGradient>
+                      <linearGradient id="colorColl" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
+                        <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
                       </linearGradient>
                       <linearGradient id="colorExp" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2}/>
@@ -5068,17 +5240,53 @@ function MonthlyReportView({
                       contentStyle={{ background: '#fff', borderRadius: 8, border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}
                       formatter={(val: number) => [`${currencySymbol}${val.toLocaleString()}`]}
                     />
-                    <Area type="monotone" dataKey="Invoiced" stroke="#3b82f6" strokeWidth={2.5} fillOpacity={1} fill="url(#colorInv)" name="Gross Job Billing" />
-                    <Area type="monotone" dataKey="Expenses" stroke="#ef4444" strokeWidth={2.5} fillOpacity={1} fill="url(#colorExp)" name="Operating Expenditures" />
+                    <Area type="monotone" dataKey="Invoiced" stroke="#3b82f6" strokeWidth={2} fillOpacity={1} fill="url(#colorInv)" name="Gross Job Billing" />
+                    <Area type="monotone" dataKey="Collected" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorColl)" name="Payments Received" />
+                    <Area type="monotone" dataKey="Expenses" stroke="#ef4444" strokeWidth={2} fillOpacity={1} fill="url(#colorExp)" name="Expenditures" />
                   </AreaChart>
                 </ResponsiveContainer>
               </CardContent>
             </Card>
+          )}
 
-            {/* Expenditure Category Weightings */}
+          {reportFilter === 'income' && (
             <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider">Costs Breakdown</CardTitle>
+                <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider">Income Performance Graph</CardTitle>
+                <CardDescription>Gross billings vs cash received.</CardDescription>
+              </CardHeader>
+              <CardContent className="mt-2 h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={dailyChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="colorInv" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2}/>
+                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                      </linearGradient>
+                      <linearGradient id="colorColl" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
+                        <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="day" tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#94a3b8' }} />
+                    <YAxis tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#94a3b8' }} />
+                    <Tooltip 
+                      contentStyle={{ background: '#fff', borderRadius: 8, border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}
+                      formatter={(val: number) => [`${currencySymbol}${val.toLocaleString()}`]}
+                    />
+                    <Area type="monotone" dataKey="Invoiced" stroke="#3b82f6" strokeWidth={2.5} fillOpacity={1} fill="url(#colorInv)" name="Gross Billings" />
+                    <Area type="monotone" dataKey="Collected" stroke="#10b981" strokeWidth={2.5} fillOpacity={1} fill="url(#colorColl)" name="Cash Collected" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          )}
+
+          {reportFilter === 'expenses' && (
+            <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider">Costs & Expenses Breakdown</CardTitle>
                 <CardDescription>Detailed classification of expenses.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -5087,7 +5295,7 @@ function MonthlyReportView({
                     No operating expenses logged this month.
                   </div>
                 ) : (
-                  <div className="space-y-3.5 pt-2">
+                  <div className="space-y-4 pt-2">
                     {Object.entries(expensesByCategory).map(([category, amount]) => {
                       const percentage = totalExpenses > 0 ? (amount / totalExpenses) * 100 : 0;
                       return (
@@ -5096,7 +5304,7 @@ function MonthlyReportView({
                             <span className="capitalize">{category}</span>
                             <span className="text-slate-800 font-bold">{currencySymbol}{amount.toLocaleString(undefined, {minimumFractionDigits:2})} ({percentage.toFixed(0)}%)</span>
                           </div>
-                          <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                          <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden">
                             <div 
                               className="h-full bg-rose-500 rounded-full" 
                               style={{ width: `${percentage}%` }}
@@ -5113,145 +5321,238 @@ function MonthlyReportView({
                 )}
               </CardContent>
             </Card>
-          </div>
+          )}
+
+          {/* Section: Chronological Activities Timeline */}
+          {(reportFilter === 'all' || reportFilter === 'activities') && (
+            <Card className="shadow-sm border-slate-100 print:shadow-none print:border-slate-300 break-after-page">
+              <CardHeader className="py-4 px-6 border-b border-slate-100 flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle className="text-sm font-black text-slate-900 uppercase tracking-wider">Chronological Activities Timeline</CardTitle>
+                  <CardDescription className="print:hidden font-medium text-xs">A unified chronological report of all store receipts, invoices, and expenses.</CardDescription>
+                </div>
+                <Badge className="bg-slate-100 text-slate-800 border border-slate-200 font-medium">{combinedActivities.length} Activities</Badge>
+              </CardHeader>
+              <CardContent className="p-0 overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-slate-50/50">
+                      <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">DATE</TableHead>
+                      <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">TYPE</TableHead>
+                      <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">REF #</TableHead>
+                      <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">CLIENT / PARTICULARS</TableHead>
+                      <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">DETAILS</TableHead>
+                      <TableHead className="text-right text-[10px] font-bold text-slate-400 tracking-wider">INVOICED (+)</TableHead>
+                      <TableHead className="text-right text-[10px] font-bold text-slate-400 tracking-wider">CASH RECVD (+)</TableHead>
+                      <TableHead className="text-right text-[10px] font-bold text-slate-400 tracking-wider">EXPENSE (-)</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {combinedActivities.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={8} className="h-24 text-center text-slate-400 text-xs font-semibold">
+                          No activities registered in this period.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      combinedActivities.map((act) => (
+                        <TableRow key={act.id} className="hover:bg-slate-50/20">
+                          <TableCell className="text-xs text-slate-500 whitespace-nowrap">
+                            {format(act.date, 'MMM d, yyyy')}
+                          </TableCell>
+                          <TableCell className="text-xs font-semibold">
+                            {act.type === 'income' ? (
+                              <span className="inline-flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full text-[10px] uppercase font-bold tracking-wider">
+                                Income
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full text-[10px] uppercase font-bold tracking-wider">
+                                Expense
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="font-mono text-xs text-slate-600 whitespace-nowrap">
+                            {act.ref}
+                          </TableCell>
+                          <TableCell className="text-xs font-semibold text-slate-900">
+                            {act.party}
+                          </TableCell>
+                          <TableCell className="text-xs text-slate-600 max-w-[180px] truncate">
+                            {act.description}
+                          </TableCell>
+                          <TableCell className="text-right text-xs font-semibold text-slate-900">
+                            {act.incomeAmount > 0 ? `${currencySymbol}${act.incomeAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}` : '-'}
+                          </TableCell>
+                          <TableCell className="text-right text-xs font-bold text-emerald-600">
+                            {act.cashReceived > 0 ? `${currencySymbol}${act.cashReceived.toLocaleString(undefined, {minimumFractionDigits: 2})}` : '-'}
+                          </TableCell>
+                          <TableCell className="text-right text-xs font-bold text-rose-600">
+                            {act.expenseAmount > 0 ? `${currencySymbol}${act.expenseAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}` : '-'}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                    {combinedActivities.length > 0 && (
+                      <TableRow className="bg-slate-50/30 font-bold border-t border-slate-200">
+                        <TableCell colSpan={5} className="text-xs text-slate-900 text-right font-black">Statement Grand Totals:</TableCell>
+                        <TableCell className="text-right text-xs text-slate-900 font-extrabold font-black">
+                          {currencySymbol}{totalInvoiced.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                        </TableCell>
+                        <TableCell className="text-right text-xs text-emerald-600 font-black">
+                          {currencySymbol}{totalCollected.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                        </TableCell>
+                        <TableCell className="text-right text-xs text-rose-600 font-black">
+                          {currencySymbol}{totalExpenses.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Section: Works Ledger */}
-          <Card className="shadow-sm border-slate-100 print:shadow-none print:border-slate-300 break-after-page">
-            <CardHeader className="py-4 px-6 border-b border-slate-100 flex flex-row items-center justify-between">
-              <div>
-                <CardTitle className="text-sm font-black text-slate-900 uppercase tracking-wider">Monthly Works Ledger</CardTitle>
-                <CardDescription className="print:hidden">Chronological index of all orders created and processed.</CardDescription>
-              </div>
-              <Badge className="bg-blue-50 text-blue-600 border border-blue-200 font-medium">{monthlyOrders.length} Invoices</Badge>
-            </CardHeader>
-            <CardContent className="p-0 overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-slate-50/50">
-                    <TableHead className="w-[100px] text-[10px] font-bold text-slate-400 tracking-wider">INVOICE</TableHead>
-                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">DATE</TableHead>
-                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">CLIENT</TableHead>
-                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">DESCRIPTION DETAILS</TableHead>
-                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">STATUS</TableHead>
-                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">PAYMENT</TableHead>
-                    <TableHead className="text-right text-[10px] font-bold text-slate-400 tracking-wider">TOTAL VALUE</TableHead>
-                    <TableHead className="text-right text-[10px] font-bold text-slate-400 tracking-wider">CASH RECVD</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {monthlyOrders.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={8} className="h-24 text-center text-slate-400 text-xs font-semibold">
-                        No orders registered in this period.
-                      </TableCell>
+          {(reportFilter === 'all' || reportFilter === 'income') && (
+            <Card className="shadow-sm border-slate-100 print:shadow-none print:border-slate-300 break-after-page">
+              <CardHeader className="py-4 px-6 border-b border-slate-100 flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle className="text-sm font-black text-slate-900 uppercase tracking-wider">Monthly Works Ledger</CardTitle>
+                  <CardDescription className="print:hidden">Chronological index of all orders created and processed.</CardDescription>
+                </div>
+                <Badge className="bg-blue-50 text-blue-600 border border-blue-200 font-medium">{monthlyOrders.length} Invoices</Badge>
+              </CardHeader>
+              <CardContent className="p-0 overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-slate-50/50">
+                      <TableHead className="w-[100px] text-[10px] font-bold text-slate-400 tracking-wider">INVOICE</TableHead>
+                      <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">DATE</TableHead>
+                      <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">CLIENT</TableHead>
+                      <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">DESCRIPTION DETAILS</TableHead>
+                      <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">STATUS</TableHead>
+                      <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">PAYMENT</TableHead>
+                      <TableHead className="text-right text-[10px] font-bold text-slate-400 tracking-wider">TOTAL VALUE</TableHead>
+                      <TableHead className="text-right text-[10px] font-bold text-slate-400 tracking-wider">CASH RECVD</TableHead>
                     </TableRow>
-                  ) : (
-                    monthlyOrders.map((o) => (
-                      <TableRow key={o.id} className="hover:bg-slate-50/20">
-                        <TableCell className="font-mono text-xs text-slate-800 font-black">
-                          {o.invoiceNumber || `#${o.id?.slice(-6).toUpperCase()}`}
-                        </TableCell>
-                        <TableCell className="text-xs text-slate-500 whitespace-nowrap">
-                          {format(getOrderDate(o), 'MMM d, yyyy')}
-                        </TableCell>
-                        <TableCell className="text-xs font-semibold text-slate-900">
-                          {o.customerName}
-                        </TableCell>
-                        <TableCell className="text-xs text-slate-600 max-w-[200px] truncate">
-                          {o.items?.map(i => i.description).join(', ') || 'Custom Job'}
-                        </TableCell>
-                        <TableCell>
-                          {getStatusBadge(o.status)}
-                        </TableCell>
-                        <TableCell>
-                          {getPaymentBadge(o.paymentStatus)}
-                        </TableCell>
-                        <TableCell className="text-right text-xs font-semibold text-slate-900">
-                          {currencySymbol}{o.totalAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}
-                        </TableCell>
-                        <TableCell className="text-right text-xs font-bold text-emerald-600">
-                          {currencySymbol}{o.paidAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                  </TableHeader>
+                  <TableBody>
+                    {monthlyOrders.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={8} className="h-24 text-center text-slate-400 text-xs font-semibold">
+                          No orders registered in this period.
                         </TableCell>
                       </TableRow>
-                    ))
-                  )}
-                  {monthlyOrders.length > 0 && (
-                    <TableRow className="bg-slate-50/30 font-bold border-t border-slate-200">
-                      <TableCell colSpan={4} className="text-xs text-slate-900 text-right">Running Total (Excludes Cancelled): All Active Billings</TableCell>
-                      <TableCell colSpan={2} />
-                      <TableCell className="text-right text-xs text-slate-900 font-extrabold font-black">
-                        {currencySymbol}{totalInvoiced.toLocaleString(undefined, {minimumFractionDigits: 2})}
-                      </TableCell>
-                      <TableCell className="text-right text-xs text-emerald-600 font-black">
-                        {currencySymbol}{totalCollected.toLocaleString(undefined, {minimumFractionDigits: 2})}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+                    ) : (
+                      monthlyOrders.map((o) => (
+                        <TableRow key={o.id} className="hover:bg-slate-50/20">
+                          <TableCell className="font-mono text-xs text-slate-800 font-black">
+                            {o.invoiceNumber || `#${o.id?.slice(-6).toUpperCase()}`}
+                          </TableCell>
+                          <TableCell className="text-xs text-slate-500 whitespace-nowrap">
+                            {format(getOrderDate(o), 'MMM d, yyyy')}
+                          </TableCell>
+                          <TableCell className="text-xs font-semibold text-slate-900">
+                            {o.customerName}
+                          </TableCell>
+                          <TableCell className="text-xs text-slate-600 max-w-[200px] truncate">
+                            {o.items?.map(i => i.description).join(', ') || 'Custom Job'}
+                          </TableCell>
+                          <TableCell>
+                            {getStatusBadge(o.status)}
+                          </TableCell>
+                          <TableCell>
+                            {getPaymentBadge(o.paymentStatus)}
+                          </TableCell>
+                          <TableCell className="text-right text-xs font-semibold text-slate-900">
+                            {currencySymbol}{o.totalAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                          </TableCell>
+                          <TableCell className="text-right text-xs font-bold text-emerald-600">
+                            {currencySymbol}{o.paidAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                    {monthlyOrders.length > 0 && (
+                      <TableRow className="bg-slate-50/30 font-bold border-t border-slate-200">
+                        <TableCell colSpan={4} className="text-xs text-slate-900 text-right">Running Total (Excludes Cancelled): All Active Billings</TableCell>
+                        <TableCell colSpan={2} />
+                        <TableCell className="text-right text-xs text-slate-900 font-extrabold font-black">
+                          {currencySymbol}{totalInvoiced.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                        </TableCell>
+                        <TableCell className="text-right text-xs text-emerald-600 font-black">
+                          {currencySymbol}{totalCollected.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Section: Expenditures Ledger */}
-          <Card className="shadow-sm border-slate-100 print:shadow-none print:border-slate-300">
-            <CardHeader className="py-4 px-6 border-b border-slate-100 flex flex-row items-center justify-between">
-              <div>
-                <CardTitle className="text-sm font-black text-slate-900 uppercase tracking-wider">Costs and Expenditures</CardTitle>
-                <CardDescription className="print:hidden font-medium text-xs">Ledger log of all expenditures filed across the shop.</CardDescription>
-              </div>
-              <Badge className="bg-rose-50 text-rose-600 border border-rose-200 font-medium">{monthlyExpenses.length} Receipts</Badge>
-            </CardHeader>
-            <CardContent className="p-0 overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-slate-50/50">
-                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">DATE</TableHead>
-                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">PARTICULARS DESCRIPTION</TableHead>
-                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">CLASSIFICATION CATEGORY</TableHead>
-                    <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">CREATED BY</TableHead>
-                    <TableHead className="text-right text-[10px] font-bold text-slate-400 tracking-wider font-semibold">COST VALUE</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {monthlyExpenses.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={5} className="h-24 text-center text-slate-400 text-xs font-semibold">
-                        No expenses registered during this statement.
-                      </TableCell>
+          {(reportFilter === 'all' || reportFilter === 'expenses') && (
+            <Card className="shadow-sm border-slate-100 print:shadow-none print:border-slate-300">
+              <CardHeader className="py-4 px-6 border-b border-slate-100 flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle className="text-sm font-black text-slate-900 uppercase tracking-wider">Costs and Expenditures</CardTitle>
+                  <CardDescription className="print:hidden font-medium text-xs">Ledger log of all expenditures filed across the shop.</CardDescription>
+                </div>
+                <Badge className="bg-rose-50 text-rose-600 border border-rose-200 font-medium">{monthlyExpenses.length} Receipts</Badge>
+              </CardHeader>
+              <CardContent className="p-0 overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-slate-50/50">
+                      <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">DATE</TableHead>
+                      <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">PARTICULARS DESCRIPTION</TableHead>
+                      <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">CLASSIFICATION CATEGORY</TableHead>
+                      <TableHead className="text-[10px] font-bold text-slate-400 tracking-wider">CREATED BY</TableHead>
+                      <TableHead className="text-right text-[10px] font-bold text-slate-400 tracking-wider font-semibold">COST VALUE</TableHead>
                     </TableRow>
-                  ) : (
-                    monthlyExpenses.map((e) => (
-                      <TableRow key={e.id} className="hover:bg-slate-50/20">
-                        <TableCell className="text-xs text-slate-500 whitespace-nowrap">
-                          {format(getExpenseDate(e), 'MMM d, yyyy')}
-                        </TableCell>
-                        <TableCell className="text-xs font-semibold text-slate-900">
-                          {e.description || 'General Operational Expense'}
-                        </TableCell>
-                        <TableCell className="text-xs font-semibold capitalize text-slate-500">
-                          {e.category}
-                        </TableCell>
-                        <TableCell className="text-xs text-slate-500">
-                          {e.createdBy === user.uid ? 'Me' : 'Staff Member'}
-                        </TableCell>
-                        <TableCell className="text-right text-xs font-black text-rose-600">
-                          {currencySymbol}{e.amount.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                  </TableHeader>
+                  <TableBody>
+                    {monthlyExpenses.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="h-24 text-center text-slate-400 text-xs font-semibold">
+                          No expenses registered during this statement.
                         </TableCell>
                       </TableRow>
-                    ))
-                  )}
-                  {monthlyExpenses.length > 0 && (
-                    <TableRow className="bg-slate-50/30 font-bold border-t border-slate-200">
-                      <TableCell colSpan={4} className="text-xs text-slate-900 text-right font-bold">Total Operating Expenditure Costs:</TableCell>
-                      <TableCell className="text-right text-xs text-rose-600 font-black font-semibold">
-                        {currencySymbol}{totalExpenses.toLocaleString(undefined, {minimumFractionDigits: 2})}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+                    ) : (
+                      monthlyExpenses.map((e) => (
+                        <TableRow key={e.id} className="hover:bg-slate-50/20">
+                          <TableCell className="text-xs text-slate-500 whitespace-nowrap">
+                            {format(getExpenseDate(e), 'MMM d, yyyy')}
+                          </TableCell>
+                          <TableCell className="text-xs font-semibold text-slate-900">
+                            {e.description || 'General Operational Expense'}
+                          </TableCell>
+                          <TableCell className="text-xs font-semibold capitalize text-slate-500">
+                            {e.category}
+                          </TableCell>
+                          <TableCell className="text-xs text-slate-500">
+                            {e.createdBy === user.uid ? 'Me' : 'Staff Member'}
+                          </TableCell>
+                          <TableCell className="text-right text-xs font-black text-rose-600">
+                            {currencySymbol}{e.amount.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                    {monthlyExpenses.length > 0 && (
+                      <TableRow className="bg-slate-50/30 font-bold border-t border-slate-200">
+                        <TableCell colSpan={4} className="text-xs text-slate-900 text-right font-bold">Total Operating Expenditure Costs:</TableCell>
+                        <TableCell className="text-right text-xs text-rose-600 font-black font-semibold">
+                          {currencySymbol}{totalExpenses.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Printable Authorization Footnotes */}
           <div className="hidden print:grid grid-cols-2 gap-12 pt-16 border-t border-slate-200 mt-12 text-center text-xs text-slate-500">
