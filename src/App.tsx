@@ -2587,6 +2587,73 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const receiptRef = useRef<HTMLDivElement>(null);
 
+  // Order Backdating / Date Customization State
+  const [orderDateMode, setOrderDateMode] = useState<'current' | 'custom'>('current');
+  const [customOrderDate, setCustomOrderDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+
+  // Order Editing State
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null);
+  const [editPricingMode, setEditPricingMode] = useState<'standard' | 'area'>('standard');
+  const [editSelectedProduct, setEditSelectedProduct] = useState<Product | null>(null);
+  const [editWidth, setEditWidth] = useState<string>('0');
+  const [editHeight, setEditHeight] = useState<string>('0');
+  const [editQuantity, setEditQuantity] = useState<string>('1');
+  const [editUnitPrice, setEditUnitPrice] = useState<string>('0');
+  const [editDescription, setEditDescription] = useState<string>('');
+  const [editCustomerId, setEditCustomerId] = useState<string>('');
+  const [editPaidAmount, setEditPaidAmount] = useState<string>('0');
+  const [editOrderDateMode, setEditOrderDateMode] = useState<'original' | 'current' | 'custom'>('original');
+  const [editCustomOrderDate, setEditCustomOrderDate] = useState<string>('');
+
+  useEffect(() => {
+    if (editPricingMode === 'area' && editSelectedProduct) {
+      const w = parseFloat(editWidth) || 0;
+      const h = parseFloat(editHeight) || 0;
+      const calculatedPrice = w * h * editSelectedProduct.pricePerSqFt;
+      setEditUnitPrice(calculatedPrice.toFixed(2));
+    }
+  }, [editPricingMode, editSelectedProduct, editWidth, editHeight]);
+
+  const startEditOrder = (order: Order) => {
+    setEditingOrder(order);
+    setEditCustomerId(order.customerId);
+    const item = order.items[0];
+    if (item) {
+      setEditDescription(item.description || '');
+      setEditQuantity(String(item.quantity || 1));
+      setEditUnitPrice(String(item.unitPrice || 0));
+      if (item.width !== null && item.width !== undefined && item.height !== null && item.height !== undefined) {
+        setEditPricingMode('area');
+        setEditWidth(String(item.width));
+        setEditHeight(String(item.height));
+        if (item.productId) {
+          setEditSelectedProduct(products.find(p => p.id === item.productId) || null);
+        } else {
+          setEditSelectedProduct(null);
+        }
+      } else {
+        setEditPricingMode('standard');
+        setEditWidth('0');
+        setEditHeight('0');
+        setEditSelectedProduct(null);
+      }
+    } else {
+      setEditDescription('');
+      setEditQuantity('1');
+      setEditUnitPrice('0');
+      setEditPricingMode('standard');
+      setEditWidth('0');
+      setEditHeight('0');
+      setEditSelectedProduct(null);
+    }
+    setEditPaidAmount(String(order.paidAmount || 0));
+
+    // Handle editing date initial states
+    const orderDate = order.createdAt instanceof Timestamp ? order.createdAt.toDate() : new Date(order.createdAt);
+    setEditCustomOrderDate(format(orderDate, 'yyyy-MM-dd'));
+    setEditOrderDateMode('original');
+  };
+
   // Search & Filter State
   const [orderSearchTerm, setOrderSearchTerm] = useState('');
   const [orderStatusFilter, setOrderStatusFilter] = useState('all');
@@ -2661,6 +2728,10 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
     const invNumber = settings?.nextInvoiceNumber || 1001;
     const invoiceNumberString = `${invPrefix}-${invNumber.toString().padStart(4, '0')}`;
 
+    const dateToUse = orderDateMode === 'custom' && customOrderDate
+      ? Timestamp.fromDate(new Date(customOrderDate + 'T12:00:00'))
+      : serverTimestamp();
+
     const newOrder: Omit<Order, 'id'> = {
       tenantId: user.uid,
       invoiceNumber: invoiceNumberString,
@@ -2682,7 +2753,7 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
       paidAmount: Number(formData.get('paidAmount')),
       status: 'pending',
       paymentStatus: Number(formData.get('paidAmount')) >= total ? 'paid' : (Number(formData.get('paidAmount')) > 0 ? 'partial' : 'unpaid'),
-      createdAt: serverTimestamp(),
+      createdAt: dateToUse,
       updatedAt: serverTimestamp(),
       createdBy: user.uid
     };
@@ -2703,6 +2774,8 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
       setHeight('0');
       setQuantity('1');
       setUnitPrice('0');
+      setOrderDateMode('current');
+      setCustomOrderDate(format(new Date(), 'yyyy-MM-dd'));
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'orders');
     } finally {
@@ -2762,6 +2835,56 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
       setDeleteOrderId(null);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `orders/${deleteOrderId}`);
+    }
+  };
+
+  const handleUpdateOrder = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!editingOrder) return;
+
+    const customer = customers.find(c => c.id === editCustomerId);
+    
+    const qty = Number(editQuantity);
+    const uPrice = Number(editUnitPrice);
+    const total = qty * uPrice;
+    const paidAmt = Number(editPaidAmount);
+
+    setIsSubmitting(true);
+
+    const updatedOrder: Partial<Order> = {
+      customerId: editCustomerId,
+      customerName: customer?.name || 'Unknown',
+      items: [
+        { 
+          description: editDescription,
+          productId: editSelectedProduct?.id || null,
+          quantity: qty, 
+          unitPrice: uPrice,
+          width: editPricingMode === 'area' ? Number(editWidth) : null,
+          height: editPricingMode === 'area' ? Number(editHeight) : null,
+          area: editPricingMode === 'area' ? (Number(editWidth) * Number(editHeight)) : null,
+          total: total
+        }
+      ],
+      totalAmount: total,
+      paidAmount: paidAmt,
+      paymentStatus: paidAmt >= total ? 'paid' : (paidAmt > 0 ? 'partial' : 'unpaid'),
+      updatedAt: serverTimestamp()
+    };
+
+    if (editOrderDateMode === 'custom' && editCustomOrderDate) {
+      updatedOrder.createdAt = Timestamp.fromDate(new Date(editCustomOrderDate + 'T12:00:00'));
+    } else if (editOrderDateMode === 'current') {
+      updatedOrder.createdAt = serverTimestamp();
+    }
+
+    try {
+      await updateDoc(doc(db, 'orders', editingOrder.id!), updatedOrder);
+      setEditingOrder(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `orders/${editingOrder.id}`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -3042,6 +3165,47 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
                   <Label htmlFor="paidAmount">Paid Amount ({settings?.currencySymbol || 'GH₵'})</Label>
                   <Input id="paidAmount" name="paidAmount" type="number" step="0.01" min="0" defaultValue="0" required />
                 </div>
+
+                <div className="grid gap-2 border-t border-slate-100 pt-4">
+                  <Label className="text-slate-700 font-medium">Order Date</Label>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant={orderDateMode === 'current' ? 'default' : 'outline'}
+                      className={`flex-1 h-9 text-xs font-bold ${
+                        orderDateMode === 'current' 
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                          : 'border-slate-200 text-slate-700 hover:bg-slate-50'
+                      }`}
+                      onClick={() => setOrderDateMode('current')}
+                    >
+                      Current Date & Time
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={orderDateMode === 'custom' ? 'default' : 'outline'}
+                      className={`flex-1 h-9 text-xs font-bold ${
+                        orderDateMode === 'custom' 
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                          : 'border-slate-200 text-slate-700 hover:bg-slate-50'
+                      }`}
+                      onClick={() => setOrderDateMode('custom')}
+                    >
+                      Backdate / Custom
+                    </Button>
+                  </div>
+                  {orderDateMode === 'custom' && (
+                    <div className="mt-2 animate-in fade-in-50 duration-200">
+                      <Input
+                        type="date"
+                        value={customOrderDate}
+                        onChange={(e) => setCustomOrderDate(e.target.value)}
+                        className="h-10 text-slate-900 bg-white"
+                        required
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
               <DialogFooter>
                 <Button type="submit" disabled={isSubmitting} className="bg-blue-600 hover:bg-blue-700 w-full">
@@ -3248,6 +3412,16 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
                         variant="ghost" 
                         size="icon" 
                         className="h-8 w-8 text-slate-400 hover:text-blue-600"
+                        title="Edit Order"
+                        onClick={() => startEditOrder(order)}
+                      >
+                        <Edit className="w-4 h-4" />
+                      </Button>
+
+                      <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        className="h-8 w-8 text-slate-400 hover:text-blue-600"
                         title="Print Invoice"
                         onClick={() => { setSelectedOrder(order); setIsReceiptOpen(true); }}
                       >
@@ -3412,6 +3586,218 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Order Dialog */}
+      <Dialog open={editingOrder !== null} onOpenChange={(open) => { if (!open) setEditingOrder(null); }}>
+        <DialogContent className="sm:max-w-lg bg-white">
+          <form onSubmit={handleUpdateOrder}>
+            <DialogHeader>
+              <DialogTitle className="text-slate-900 font-bold text-lg">Edit Order {editingOrder?.invoiceNumber || `#${editingOrder?.id?.slice(-6).toUpperCase()}`}</DialogTitle>
+              <DialogDescription className="text-slate-500 text-sm">Update the details for this printing job.</DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <Label htmlFor="editCustomerId">Customer</Label>
+                <Select value={editCustomerId} onValueChange={setEditCustomerId} required>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a customer" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {customers.map(c => (
+                      <SelectItem key={c.id} value={c.id!}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label>Pricing Mode</Label>
+                  <Select value={editPricingMode} onValueChange={(v: any) => setEditPricingMode(v)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="standard">Standard</SelectItem>
+                      <SelectItem value="area">Area-Based (Sq Ft)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {editPricingMode === 'area' && (
+                  <div className="grid gap-2">
+                    <Label>Product / Material</Label>
+                    <Select 
+                      value={editSelectedProduct?.id || ""} 
+                      onValueChange={(v) => setEditSelectedProduct(products.find(p => p.id === v) || null)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select material" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {products.map(p => (
+                          <SelectItem key={p.id} value={p.id!}>{p.name} ({settings?.currencySymbol || 'GH₵'}{p.pricePerSqFt}/sqft)</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="editDescription">Job Description</Label>
+                <Input 
+                  id="editDescription" 
+                  value={editDescription} 
+                  onChange={(e) => setEditDescription(e.target.value)} 
+                  placeholder="e.g. 500 Business Cards" 
+                  required 
+                />
+              </div>
+
+              {editPricingMode === 'area' ? (
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="editWidth">Width (ft)</Label>
+                    <Input 
+                      id="editWidth" 
+                      type="number" 
+                      step="0.1" 
+                      value={editWidth} 
+                      onChange={(e) => setEditWidth(e.target.value)} 
+                      required 
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="editHeight">Height (ft)</Label>
+                    <Input 
+                      id="editHeight" 
+                      type="number" 
+                      step="0.1" 
+                      value={editHeight} 
+                      onChange={(e) => setEditHeight(e.target.value)} 
+                      required 
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Area (sq ft)</Label>
+                    <div className="h-10 flex items-center px-3 bg-slate-50 border border-slate-200 rounded-md text-sm font-medium">
+                      {(parseFloat(editWidth) * parseFloat(editHeight) || 0).toFixed(2)}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="editQuantity">Quantity</Label>
+                  <Input 
+                    id="editQuantity" 
+                    type="number" 
+                    min="1" 
+                    value={editQuantity} 
+                    onChange={(e) => setEditQuantity(e.target.value)} 
+                    required 
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="editUnitPrice">{editPricingMode === 'area' ? `Price per Piece (${settings?.currencySymbol || 'GH₵'})` : `Unit Price (${settings?.currencySymbol || 'GH₵'})`}</Label>
+                  <Input 
+                    id="editUnitPrice" 
+                    type="number" 
+                    step="0.01" 
+                    min="0" 
+                    value={editUnitPrice} 
+                    onChange={(e) => setEditUnitPrice(e.target.value)} 
+                    required 
+                  />
+                </div>
+              </div>
+
+              <div className="p-3 bg-blue-50 rounded-lg flex items-center justify-between">
+                <span className="text-sm font-medium text-blue-700">Total Amount:</span>
+                <span className="text-lg font-bold text-blue-900">
+                  {settings?.currencySymbol || 'GH₵'}
+                  {(Number(editQuantity) * Number(editUnitPrice)).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                </span>
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="editPaidAmount">Paid Amount ({settings?.currencySymbol || 'GH₵'})</Label>
+                <Input 
+                  id="editPaidAmount" 
+                  type="number" 
+                  step="0.01" 
+                  min="0" 
+                  value={editPaidAmount} 
+                  onChange={(e) => setEditPaidAmount(e.target.value)} 
+                  required 
+                />
+              </div>
+
+              <div className="grid gap-2 border-t border-slate-100 pt-4">
+                <Label className="text-slate-700 font-medium">Order Date</Label>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant={editOrderDateMode === 'original' ? 'default' : 'outline'}
+                    className={`flex-1 h-9 text-xs font-bold ${
+                      editOrderDateMode === 'original' 
+                        ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                        : 'border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                    onClick={() => setEditOrderDateMode('original')}
+                  >
+                    Keep Original
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={editOrderDateMode === 'current' ? 'default' : 'outline'}
+                    className={`flex-1 h-9 text-xs font-bold ${
+                      editOrderDateMode === 'current' 
+                        ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                        : 'border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                    onClick={() => setEditOrderDateMode('current')}
+                  >
+                    Current Date/Time
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={editOrderDateMode === 'custom' ? 'default' : 'outline'}
+                    className={`flex-1 h-9 text-xs font-bold ${
+                      editOrderDateMode === 'custom' 
+                        ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                        : 'border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                    onClick={() => setEditOrderDateMode('custom')}
+                  >
+                    Set Custom Date
+                  </Button>
+                </div>
+                {editOrderDateMode === 'custom' && (
+                  <div className="mt-2 animate-in fade-in-50 duration-200">
+                    <Input
+                      type="date"
+                      value={editCustomOrderDate}
+                      onChange={(e) => setEditCustomOrderDate(e.target.value)}
+                      className="h-10 text-slate-900 bg-white"
+                      required
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+            <DialogFooter className="border-t border-slate-100 pt-4 mt-2">
+              <Button type="button" variant="outline" onClick={() => setEditingOrder(null)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isSubmitting} className="bg-blue-600 hover:bg-blue-700 text-white font-bold">
+                {isSubmitting ? "Updating..." : "Update Order"}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
