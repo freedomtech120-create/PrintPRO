@@ -115,7 +115,7 @@ service cloud.firestore {
         && incoming().tenantId == existing().tenantId
         && incoming().updatedAt == request.time
         && (
-          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'paymentStatus', 'updatedAt'])
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'paymentStatus', 'updatedAt', 'customerId', 'customerName', 'items', 'totalAmount', 'paidAmount', 'createdAt'])
           || isAdmin()
         );
       allow delete: if isEmailVerified() && (isOwner(existing().tenantId) || isAdmin());

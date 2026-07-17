@@ -112,16 +112,73 @@ import axios from 'axios';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 
+// Helper to replace oklch color declarations in CSS string to prevent html2canvas errors
+const replaceOklchInString = (cssText: string): string => {
+  let index = cssText.toLowerCase().indexOf('oklch(');
+  while (index !== -1) {
+    let openParentheses = 1;
+    let i = index + 6;
+    while (i < cssText.length && openParentheses > 0) {
+      if (cssText[i] === '(') openParentheses++;
+      else if (cssText[i] === ')') openParentheses--;
+      i++;
+    }
+    cssText = cssText.substring(0, index) + 'rgb(0, 0, 0)' + cssText.substring(i);
+    index = cssText.toLowerCase().indexOf('oklch(');
+  }
+  return cssText;
+};
+
 // Helper to generate and optionally download a PDF from a DOM element
 const generatePDFHelper = async (
   element: HTMLElement,
   fileName: string,
   download: boolean = true
 ): Promise<Blob | null> => {
+  const originalStyles = new Map<HTMLStyleElement, string>();
+  const tempStyleElements: HTMLStyleElement[] = [];
+  const disabledLinks: HTMLLinkElement[] = [];
+
   try {
     // Hide components we don't want in the PDF (e.g. interactive controls)
     const excludeElements = element.querySelectorAll('.hide-on-pdf, button');
     excludeElements.forEach(el => el.classList.add('invisible'));
+
+    // Sanitize any style elements containing oklch
+    const styleElements = document.querySelectorAll('style');
+    styleElements.forEach((el) => {
+      const html = el.innerHTML;
+      if (html && html.toLowerCase().includes('oklch(')) {
+        originalStyles.set(el, html);
+        el.innerHTML = replaceOklchInString(html);
+      }
+    });
+
+    // Also sanitize local/same-origin <link rel="stylesheet"> elements
+    const linkElements = Array.from(document.querySelectorAll('link[rel="stylesheet"]')) as HTMLLinkElement[];
+    for (const link of linkElements) {
+      try {
+        const isLocal = !link.href || link.href.startsWith(window.location.origin) || link.href.startsWith('/');
+        if (isLocal) {
+          const response = await fetch(link.href);
+          if (response.ok) {
+            let cssText = await response.text();
+            if (cssText.toLowerCase().includes('oklch(')) {
+              cssText = replaceOklchInString(cssText);
+              const tempStyle = document.createElement('style');
+              tempStyle.innerHTML = cssText;
+              document.head.appendChild(tempStyle);
+              tempStyleElements.push(tempStyle);
+              
+              link.disabled = true;
+              disabledLinks.push(link);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Could not sanitize link stylesheet:', link.href, e);
+      }
+    }
 
     // Capture the element using html2canvas
     const canvas = await html2canvas(element, {
@@ -167,6 +224,17 @@ const generatePDFHelper = async (
   } catch (error) {
     console.error('Error generating PDF:', error);
     return null;
+  } finally {
+    // Restore original styles
+    originalStyles.forEach((val, el) => {
+      el.innerHTML = val;
+    });
+
+    // Remove temporary style elements and re-enable link elements
+    tempStyleElements.forEach(el => el.remove());
+    disabledLinks.forEach(link => {
+      link.disabled = false;
+    });
   }
 };
 
@@ -4125,6 +4193,29 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
   const [isSending, setIsSending] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deleteCustomerId, setDeleteCustomerId] = useState<string | null>(null);
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
+
+  const handleUpdateCustomer = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!editingCustomer) return;
+    const formData = new FormData(e.currentTarget);
+    const updatedCustomer: Partial<Customer> = {
+      name: formData.get('name') as string,
+      email: formData.get('email') as string,
+      phone: formData.get('phone') as string,
+      address: formData.get('address') as string,
+    };
+
+    try {
+      setIsSubmitting(true);
+      await updateDoc(doc(db, 'customers', editingCustomer.id!), updatedCustomer);
+      setEditingCustomer(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `customers/${editingCustomer.id}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const handleAddCustomer = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -4291,15 +4382,26 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
                 <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold">
                   {customer.name.charAt(0).toUpperCase()}
                 </div>
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
-                  className="h-8 w-8 text-slate-400 hover:text-red-600"
-                  title="Delete Customer"
-                  onClick={() => handleDeleteCustomer(customer.id!)}
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
+                <div className="flex gap-1">
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-8 w-8 text-slate-400 hover:text-blue-600"
+                    title="Edit Customer"
+                    onClick={() => setEditingCustomer(customer)}
+                  >
+                    <Edit className="w-4 h-4" />
+                  </Button>
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-8 w-8 text-slate-400 hover:text-red-600"
+                    title="Delete Customer"
+                    onClick={() => handleDeleteCustomer(customer.id!)}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </div>
               </div>
               <CardTitle className="mt-4">{customer.name}</CardTitle>
               <CardDescription>{customer.email || 'No email provided'}</CardDescription>
@@ -4317,6 +4419,45 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
           </Card>
         ))}
       </div>
+
+      <Dialog open={editingCustomer !== null} onOpenChange={(open) => { if (!open) setEditingCustomer(null); }}>
+        <DialogContent>
+          {editingCustomer && (
+            <form onSubmit={handleUpdateCustomer}>
+              <DialogHeader>
+                <DialogTitle>Edit Customer Details</DialogTitle>
+                <DialogDescription>Modify contact or address details for this customer.</DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-4 py-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="edit-name">Full Name</Label>
+                  <Input id="edit-name" name="name" defaultValue={editingCustomer.name} required />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="edit-email">Email</Label>
+                  <Input id="edit-email" name="email" type="email" defaultValue={editingCustomer.email || ''} placeholder="john@example.com" />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="edit-phone">Phone Number</Label>
+                  <Input id="edit-phone" name="phone" defaultValue={editingCustomer.phone || ''} placeholder="+1 (555) 000-0000" />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="edit-address">Address</Label>
+                  <Input id="edit-address" name="address" defaultValue={editingCustomer.address || ''} placeholder="123 Printing St." />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setEditingCustomer(null)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={isSubmitting} className="bg-blue-600 hover:bg-blue-700 font-bold">
+                  {isSubmitting ? "Saving..." : "Save Changes"}
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={deleteCustomerId !== null} onOpenChange={(open) => { if (!open) setDeleteCustomerId(null); }}>
         <DialogContent className="sm:max-w-md bg-white">
