@@ -62,6 +62,8 @@ import {
   OperationType, 
   handleFirestoreError 
 } from './firebase';
+import { initializeApp, getApps } from 'firebase/app';
+import firebaseConfig from '../firebase-applet-config.json';
 import { 
   onAuthStateChanged, 
   signInWithPopup, 
@@ -70,7 +72,8 @@ import {
   User,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
-  updateProfile
+  updateProfile,
+  getAuth
 } from 'firebase/auth';
 import { 
   collection, 
@@ -548,7 +551,13 @@ export default function App() {
     provider.addScope('https://www.googleapis.com/auth/spreadsheets');
     provider.addScope('https://www.googleapis.com/auth/drive.file');
     try {
-      const result = await signInWithPopup(auth, provider);
+      const apps = getApps();
+      let tempApp = apps.find(app => app.name === 'temp-sheets-app');
+      if (!tempApp) {
+        tempApp = initializeApp(firebaseConfig, 'temp-sheets-app');
+      }
+      const tempAuth = getAuth(tempApp);
+      const result = await signInWithPopup(tempAuth, provider);
       const credential = GoogleAuthProvider.credentialFromResult(result);
       if (credential?.accessToken) {
         setGoogleAccessToken(credential.accessToken);
@@ -2655,6 +2664,10 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const receiptRef = useRef<HTMLDivElement>(null);
 
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [quickCustomerError, setQuickCustomerError] = useState<string | null>(null);
+
   // Order Backdating / Date Customization State
   const [orderDateMode, setOrderDateMode] = useState<'current' | 'custom'>('current');
   const [customOrderDate, setCustomOrderDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
@@ -2781,6 +2794,7 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
 
   const handleAddOrder = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    setCreateError(null);
     const formData = new FormData(e.currentTarget);
     const customerId = formData.get('customerId') as string;
     const customer = customers.find(c => c.id === customerId);
@@ -2844,8 +2858,17 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
       setUnitPrice('0');
       setOrderDateMode('current');
       setCustomOrderDate(format(new Date(), 'yyyy-MM-dd'));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'orders');
+    } catch (error: any) {
+      console.error("Error creating order:", error);
+      const friendlyMsg = error?.message?.includes("permission-denied") || error?.code === "permission-denied"
+        ? "Access Denied: You do not have permission to create orders. Please verify your account setup."
+        : (error?.message || "An unexpected error occurred while saving the order.");
+      setCreateError(friendlyMsg);
+      try {
+        handleFirestoreError(error, OperationType.CREATE, 'orders');
+      } catch (fe) {
+        // Suppress unhandled re-throw to prevent page reload
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -2853,6 +2876,7 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
 
   const handleQuickAddCustomer = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    setQuickCustomerError(null);
     const formData = new FormData(e.currentTarget);
     
     const newCustomer: Omit<Customer, 'id'> = {
@@ -2867,8 +2891,15 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
       setIsSubmitting(true);
       await addDoc(collection(db, 'customers'), newCustomer);
       setIsQuickAddCustomerOpen(false);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'customers');
+    } catch (error: any) {
+      console.error("Error quick adding customer:", error);
+      const friendlyMsg = error?.message?.includes("permission-denied") || error?.code === "permission-denied"
+        ? "Access Denied: You do not have permission to add customers. Please verify your account setup."
+        : (error?.message || "An unexpected error occurred while saving the customer.");
+      setQuickCustomerError(friendlyMsg);
+      try {
+        handleFirestoreError(error, OperationType.CREATE, 'customers');
+      } catch (fe) {}
     } finally {
       setIsSubmitting(false);
     }
@@ -2909,6 +2940,7 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
   const handleUpdateOrder = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!editingOrder) return;
+    setEditError(null);
 
     const customer = customers.find(c => c.id === editCustomerId);
     
@@ -2949,8 +2981,17 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
     try {
       await updateDoc(doc(db, 'orders', editingOrder.id!), updatedOrder);
       setEditingOrder(null);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `orders/${editingOrder.id}`);
+    } catch (error: any) {
+      console.error("Error updating order:", error);
+      const friendlyMsg = error?.message?.includes("permission-denied") || error?.code === "permission-denied"
+        ? "Access Denied: You do not have permission to update this order."
+        : (error?.message || "An unexpected error occurred while updating the order.");
+      setEditError(friendlyMsg);
+      try {
+        handleFirestoreError(error, OperationType.UPDATE, `orders/${editingOrder.id}`);
+      } catch (fe) {
+        // Suppress unhandled re-throw
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -3091,7 +3132,7 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
             />
           </div>
           <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
-            <Dialog open={isNewOrderOpen} onOpenChange={setIsNewOrderOpen}>
+            <Dialog open={isNewOrderOpen} onOpenChange={(open) => { setIsNewOrderOpen(open); if (!open) setCreateError(null); }}>
               <DialogTrigger render={
                 <Button className="bg-blue-600 hover:bg-blue-700 h-10 px-6 font-bold shadow-lg shadow-blue-200 flex-1 lg:flex-none">
                   <Plus className="w-4 h-4 mr-2" />
@@ -3104,6 +3145,12 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
                 <DialogTitle>Create New Order</DialogTitle>
                 <DialogDescription>Enter the details for the new printing job.</DialogDescription>
               </DialogHeader>
+              {createError && (
+                <div className="mx-6 mt-4 p-3 rounded-lg bg-red-50 border border-red-100 flex items-start gap-2 text-red-700 text-xs font-medium animate-in fade-in duration-200">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-500" />
+                  <div>{createError}</div>
+                </div>
+              )}
               <div className="grid gap-4 py-4">
                 <div className="flex items-end gap-2">
                   <div className="grid gap-2 flex-1">
@@ -3119,7 +3166,7 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
                       </SelectContent>
                     </Select>
                   </div>
-                  <Dialog open={isQuickAddCustomerOpen} onOpenChange={setIsQuickAddCustomerOpen}>
+                  <Dialog open={isQuickAddCustomerOpen} onOpenChange={(open) => { setIsQuickAddCustomerOpen(open); if (!open) setQuickCustomerError(null); }}>
                     <DialogTrigger render={
                       <Button type="button" variant="outline" size="icon" className="h-10 w-10 shrink-0 border-slate-200 hover:bg-slate-50 hover:text-blue-600">
                         <UserPlus className="w-4 h-4" />
@@ -3131,6 +3178,12 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
                           <DialogTitle>Quick Add Customer</DialogTitle>
                           <DialogDescription>Add a new customer without leaving the order form.</DialogDescription>
                         </DialogHeader>
+                        {quickCustomerError && (
+                          <div className="mx-6 mt-4 p-3 rounded-lg bg-red-50 border border-red-100 flex items-start gap-2 text-red-700 text-xs font-medium animate-in fade-in duration-200">
+                            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-500" />
+                            <div>{quickCustomerError}</div>
+                          </div>
+                        )}
                         <div className="grid gap-4 py-4">
                           <div className="grid gap-2">
                             <Label htmlFor="name">Full Name</Label>
@@ -3658,13 +3711,19 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
       </Dialog>
 
       {/* Edit Order Dialog */}
-      <Dialog open={editingOrder !== null} onOpenChange={(open) => { if (!open) setEditingOrder(null); }}>
+      <Dialog open={editingOrder !== null} onOpenChange={(open) => { if (!open) { setEditingOrder(null); setEditError(null); } }}>
         <DialogContent className="sm:max-w-lg bg-white">
           <form onSubmit={handleUpdateOrder}>
             <DialogHeader>
               <DialogTitle className="text-slate-900 font-bold text-lg">Edit Order {editingOrder?.invoiceNumber || `#${editingOrder?.id?.slice(-6).toUpperCase()}`}</DialogTitle>
               <DialogDescription className="text-slate-500 text-sm">Update the details for this printing job.</DialogDescription>
             </DialogHeader>
+            {editError && (
+              <div className="mx-6 mt-4 p-3 rounded-lg bg-red-50 border border-red-100 flex items-start gap-2 text-red-700 text-xs font-medium animate-in fade-in duration-200">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-500" />
+                <div>{editError}</div>
+              </div>
+            )}
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
                 <Label htmlFor="editCustomerId">Customer</Label>
@@ -3899,8 +3958,11 @@ function ProductsView({ products, settings, user }: { products: Product[], setti
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deleteProductId, setDeleteProductId] = useState<string | null>(null);
 
+  const [createError, setCreateError] = useState<string | null>(null);
+
   const handleAddProduct = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    setCreateError(null);
     const formData = new FormData(e.currentTarget);
     
     const newProduct: Omit<Product, 'id'> = {
@@ -3914,8 +3976,15 @@ function ProductsView({ products, settings, user }: { products: Product[], setti
       setIsSubmitting(true);
       await addDoc(collection(db, 'products'), newProduct);
       setIsNewProductOpen(false);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'products');
+    } catch (error: any) {
+      console.error("Error creating product:", error);
+      const friendlyMsg = error?.message?.includes("permission-denied") || error?.code === "permission-denied"
+        ? "Access Denied: You do not have permission to add products. Please verify your account setup."
+        : (error?.message || "An unexpected error occurred while saving the product.");
+      setCreateError(friendlyMsg);
+      try {
+        handleFirestoreError(error, OperationType.CREATE, 'products');
+      } catch (fe) {}
     } finally {
       setIsSubmitting(false);
     }
@@ -3939,7 +4008,7 @@ function ProductsView({ products, settings, user }: { products: Product[], setti
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h3 className="text-xl font-bold text-slate-900">Products & Services</h3>
-        <Dialog open={isNewProductOpen} onOpenChange={setIsNewProductOpen}>
+        <Dialog open={isNewProductOpen} onOpenChange={(open) => { setIsNewProductOpen(open); if (!open) setCreateError(null); }}>
           <DialogTrigger render={
             <Button className="bg-blue-600 hover:bg-blue-700">
               <Plus className="w-4 h-4 mr-2" />
@@ -3952,6 +4021,12 @@ function ProductsView({ products, settings, user }: { products: Product[], setti
                 <DialogTitle>Add New Product</DialogTitle>
                 <DialogDescription>Define a product with its price per square foot.</DialogDescription>
               </DialogHeader>
+              {createError && (
+                <div className="mx-6 mt-4 p-3 rounded-lg bg-red-50 border border-red-100 flex items-start gap-2 text-red-700 text-xs font-medium animate-in fade-in duration-200">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-500" />
+                  <div>{createError}</div>
+                </div>
+              )}
               <div className="grid gap-4 py-4">
                 <div className="grid gap-2">
                   <Label htmlFor="name">Product Name</Label>
@@ -4031,8 +4106,11 @@ function ExpensesView({ expenses, settings, user }: { expenses: Expense[], setti
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deleteExpenseId, setDeleteExpenseId] = useState<string | null>(null);
 
+  const [createError, setCreateError] = useState<string | null>(null);
+
   const handleAddExpense = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    setCreateError(null);
     const formData = new FormData(e.currentTarget);
     
     const newExpense: Omit<Expense, 'id'> = {
@@ -4048,8 +4126,15 @@ function ExpensesView({ expenses, settings, user }: { expenses: Expense[], setti
       setIsSubmitting(true);
       await addDoc(collection(db, 'expenses'), newExpense);
       setIsNewExpenseOpen(false);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'expenses');
+    } catch (error: any) {
+      console.error("Error creating expense:", error);
+      const friendlyMsg = error?.message?.includes("permission-denied") || error?.code === "permission-denied"
+        ? "Access Denied: You do not have permission to add expenses. Please verify your account setup."
+        : (error?.message || "An unexpected error occurred while saving the expense.");
+      setCreateError(friendlyMsg);
+      try {
+        handleFirestoreError(error, OperationType.CREATE, 'expenses');
+      } catch (fe) {}
     } finally {
       setIsSubmitting(false);
     }
@@ -4073,7 +4158,7 @@ function ExpensesView({ expenses, settings, user }: { expenses: Expense[], setti
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h3 className="text-xl font-bold text-slate-900">Business Expenses</h3>
-        <Dialog open={isNewExpenseOpen} onOpenChange={setIsNewExpenseOpen}>
+        <Dialog open={isNewExpenseOpen} onOpenChange={(open) => { setIsNewExpenseOpen(open); if (!open) setCreateError(null); }}>
           <DialogTrigger render={
             <Button className="bg-blue-600 hover:bg-blue-700">
               <Plus className="w-4 h-4 mr-2" />
@@ -4086,6 +4171,12 @@ function ExpensesView({ expenses, settings, user }: { expenses: Expense[], setti
                 <DialogTitle>Add New Expense</DialogTitle>
                 <DialogDescription>Record a business cost to track your profit accurately.</DialogDescription>
               </DialogHeader>
+              {createError && (
+                <div className="mx-6 mt-4 p-3 rounded-lg bg-red-50 border border-red-100 flex items-start gap-2 text-red-700 text-xs font-medium animate-in fade-in duration-200">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-500" />
+                  <div>{createError}</div>
+                </div>
+              )}
               <div className="grid gap-4 py-4">
                 <div className="grid gap-2">
                   <Label htmlFor="description">Description</Label>
@@ -4195,9 +4286,13 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
   const [deleteCustomerId, setDeleteCustomerId] = useState<string | null>(null);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
 
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
+
   const handleUpdateCustomer = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!editingCustomer) return;
+    setEditError(null);
     const formData = new FormData(e.currentTarget);
     const updatedCustomer: Partial<Customer> = {
       name: formData.get('name') as string,
@@ -4210,8 +4305,15 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
       setIsSubmitting(true);
       await updateDoc(doc(db, 'customers', editingCustomer.id!), updatedCustomer);
       setEditingCustomer(null);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `customers/${editingCustomer.id}`);
+    } catch (error: any) {
+      console.error("Error updating customer:", error);
+      const friendlyMsg = error?.message?.includes("permission-denied") || error?.code === "permission-denied"
+        ? "Access Denied: You do not have permission to update customer details."
+        : (error?.message || "An unexpected error occurred while updating the customer.");
+      setEditError(friendlyMsg);
+      try {
+        handleFirestoreError(error, OperationType.UPDATE, `customers/${editingCustomer.id}`);
+      } catch (fe) {}
     } finally {
       setIsSubmitting(false);
     }
@@ -4219,6 +4321,7 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
 
   const handleAddCustomer = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    setCreateError(null);
     const formData = new FormData(e.currentTarget);
     
     const newCustomer: Omit<Customer, 'id'> = {
@@ -4233,8 +4336,15 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
       setIsSubmitting(true);
       await addDoc(collection(db, 'customers'), newCustomer);
       setIsNewCustomerOpen(false);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'customers');
+    } catch (error: any) {
+      console.error("Error creating customer:", error);
+      const friendlyMsg = error?.message?.includes("permission-denied") || error?.code === "permission-denied"
+        ? "Access Denied: You do not have permission to add customers. Please verify your account setup."
+        : (error?.message || "An unexpected error occurred while saving the customer.");
+      setCreateError(friendlyMsg);
+      try {
+        handleFirestoreError(error, OperationType.CREATE, 'customers');
+      } catch (fe) {}
     } finally {
       setIsSubmitting(false);
     }
@@ -4332,7 +4442,7 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
             </DialogContent>
           </Dialog>
 
-          <Dialog open={isNewCustomerOpen} onOpenChange={setIsNewCustomerOpen}>
+          <Dialog open={isNewCustomerOpen} onOpenChange={(open) => { setIsNewCustomerOpen(open); if (!open) setCreateError(null); }}>
             <DialogTrigger render={
               <Button className="bg-blue-600 hover:bg-blue-700">
                 <Plus className="w-4 h-4 mr-2" />
@@ -4345,6 +4455,12 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
                   <DialogTitle>Add New Customer</DialogTitle>
                   <DialogDescription>Store customer details for quick order creation.</DialogDescription>
                 </DialogHeader>
+                {createError && (
+                  <div className="mx-6 mt-4 p-3 rounded-lg bg-red-50 border border-red-100 flex items-start gap-2 text-red-700 text-xs font-medium animate-in fade-in duration-200">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-500" />
+                    <div>{createError}</div>
+                  </div>
+                )}
                 <div className="grid gap-4 py-4">
                   <div className="grid gap-2">
                     <Label htmlFor="name">Full Name</Label>
@@ -4420,7 +4536,7 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
         ))}
       </div>
 
-      <Dialog open={editingCustomer !== null} onOpenChange={(open) => { if (!open) setEditingCustomer(null); }}>
+      <Dialog open={editingCustomer !== null} onOpenChange={(open) => { if (!open) { setEditingCustomer(null); setEditError(null); } }}>
         <DialogContent>
           {editingCustomer && (
             <form onSubmit={handleUpdateCustomer}>
@@ -4428,6 +4544,12 @@ function CustomersView({ customers, settings, user }: { customers: Customer[], s
                 <DialogTitle>Edit Customer Details</DialogTitle>
                 <DialogDescription>Modify contact or address details for this customer.</DialogDescription>
               </DialogHeader>
+              {editError && (
+                <div className="mx-6 mt-4 p-3 rounded-lg bg-red-50 border border-red-100 flex items-start gap-2 text-red-700 text-xs font-medium animate-in fade-in duration-200">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-500" />
+                  <div>{editError}</div>
+                </div>
+              )}
               <div className="grid gap-4 py-4">
                 <div className="grid gap-2">
                   <Label htmlFor="edit-name">Full Name</Label>
@@ -4774,6 +4896,9 @@ function MonthlyReportView({
 }) {
   const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
+  const [reportMode, setReportMode] = useState<'monthly' | 'custom'>('monthly');
+  const [customStartDate, setCustomStartDate] = useState<string>(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+  const [customEndDate, setCustomEndDate] = useState<string>(format(endOfMonth(new Date()), 'yyyy-MM-dd'));
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const [reportFilter, setReportFilter] = useState<'all' | 'activities' | 'income' | 'expenses'>('all');
   
@@ -4788,9 +4913,12 @@ function MonthlyReportView({
     "July", "August", "September", "October", "November", "December"
   ];
 
+  const periodTitle = reportMode === 'monthly'
+    ? `${MONTHS[selectedMonth]} ${selectedYear}`
+    : `${format(new Date(customStartDate), 'PP')} - ${format(new Date(customEndDate), 'PP')}`;
+
   const generateReportSummaryText = () => {
-    const monthName = MONTHS[selectedMonth];
-    let msg = `Monthly Accounts Statement for ${monthName} ${selectedYear}\n`;
+    let msg = `Accounts Statement for ${periodTitle}\n`;
     msg += `Business: ${settings?.name || 'PrintPro'}\n\n`;
     msg += `📊 SUMMARY:\n`;
     msg += `- Gross Invoiced: ${settings?.currencySymbol || 'GH₵'}${totalInvoiced.toLocaleString(undefined, {minimumFractionDigits: 2})}\n`;
@@ -4805,8 +4933,10 @@ function MonthlyReportView({
   const handleDownloadReportPDF = async () => {
     if (!reportRef.current) return;
     setIsGeneratingPDF(true);
-    const monthName = MONTHS[selectedMonth];
-    const fileName = `Accounts_Report_${monthName}_${selectedYear}.pdf`;
+    const periodName = reportMode === 'monthly'
+      ? `${MONTHS[selectedMonth]}_${selectedYear}`
+      : `${customStartDate}_to_${customEndDate}`;
+    const fileName = `Accounts_Report_${periodName}.pdf`;
     try {
       await generatePDFHelper(reportRef.current, fileName, true);
     } catch (err) {
@@ -4820,15 +4950,17 @@ function MonthlyReportView({
   const handleShareReportPDF = async (method: 'whatsapp' | 'email' | 'sms') => {
     if (!reportRef.current) return;
     setIsGeneratingPDF(true);
-    const monthName = MONTHS[selectedMonth];
-    const fileName = `Accounts_Report_${monthName}_${selectedYear}.pdf`;
+    const periodName = reportMode === 'monthly'
+      ? `${MONTHS[selectedMonth]}_${selectedYear}`
+      : `${customStartDate}_to_${customEndDate}`;
+    const fileName = `Accounts_Report_${periodName}.pdf`;
     
     const textShareFallback = () => {
       const text = encodeURIComponent(generateReportSummaryText());
       if (method === 'whatsapp') {
         window.open(`https://wa.me/?text=${text}`, '_blank');
       } else if (method === 'email') {
-        const subject = encodeURIComponent(`Monthly Accounts Statement: ${monthName} ${selectedYear}`);
+        const subject = encodeURIComponent(`Accounts Statement: ${periodTitle}`);
         window.location.href = `mailto:?subject=${subject}&body=${text}`;
       } else if (method === 'sms') {
         window.location.href = `sms:?body=${text}`;
@@ -4843,7 +4975,7 @@ function MonthlyReportView({
           await navigator.share({
             files: [file],
             title: fileName,
-            text: `Monthly Accounts Report for ${monthName} ${selectedYear}`
+            text: `Accounts Report for ${periodTitle}`
           });
         } else {
           if (confirm("Direct PDF file sharing is only supported on mobile devices. We will download the PDF for you, and you can share the summary text instead?")) {
@@ -4875,16 +5007,21 @@ function MonthlyReportView({
   };
 
   // Filter checks
-  const isSameMonthAndYear = (date: Date, m: number, y: number) => {
-    return date.getMonth() === m && date.getFullYear() === y;
+  const isWithinCustomRange = (date: Date) => {
+    if (reportMode === 'monthly') {
+      return date.getMonth() === selectedMonth && date.getFullYear() === selectedYear;
+    } else {
+      const dateStr = format(date, 'yyyy-MM-dd');
+      return dateStr >= customStartDate && dateStr <= customEndDate;
+    }
   };
 
   // Filter lists
-  const monthlyOrders = orders.filter(o => isSameMonthAndYear(getOrderDate(o), selectedMonth, selectedYear));
+  const monthlyOrders = orders.filter(o => isWithinCustomRange(getOrderDate(o)));
   const activeOrders = monthlyOrders.filter(o => o.status !== 'cancelled');
   const cancelledOrders = monthlyOrders.filter(o => o.status === 'cancelled');
 
-  const monthlyExpenses = expenses.filter(e => isSameMonthAndYear(getExpenseDate(e), selectedMonth, selectedYear));
+  const monthlyExpenses = expenses.filter(e => isWithinCustomRange(getExpenseDate(e)));
 
   // Computations
   const totalInvoiced = activeOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
@@ -4945,19 +5082,75 @@ function MonthlyReportView({
   const logoUrl = settings?.logoUrl || '';
 
   // Daily Chart Data
-  const daysInMonthCount = new Date(selectedYear, selectedMonth + 1, 0).getDate();
-  const dailyChartData = Array.from({ length: daysInMonthCount }, (_, idx) => {
-    const day = idx + 1;
-    const dayOrders = activeOrders.filter(o => getOrderDate(o).getDate() === day);
-    const dayExpenses = monthlyExpenses.filter(e => getExpenseDate(e).getDate() === day);
+  const getDailyChartData = () => {
+    if (reportMode === 'monthly') {
+      const daysInMonthCount = new Date(selectedYear, selectedMonth + 1, 0).getDate();
+      return Array.from({ length: daysInMonthCount }, (_, idx) => {
+        const day = idx + 1;
+        const dayOrders = activeOrders.filter(o => getOrderDate(o).getDate() === day);
+        const dayExpenses = monthlyExpenses.filter(e => getExpenseDate(e).getDate() === day);
 
-    return {
-      day: day.toString(),
-      Invoiced: dayOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0),
-      Collected: dayOrders.reduce((sum, o) => sum + (o.paidAmount || 0), 0),
-      Expenses: dayExpenses.reduce((sum, e) => sum + (e.amount || 0), 0),
-    };
-  });
+        return {
+          label: day.toString(),
+          Invoiced: dayOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0),
+          Collected: dayOrders.reduce((sum, o) => sum + (o.paidAmount || 0), 0),
+          Expenses: dayExpenses.reduce((sum, e) => sum + (e.amount || 0), 0),
+        };
+      });
+    } else {
+      const start = new Date(customStartDate);
+      const end = new Date(customEndDate);
+      const diffTime = Math.abs(end.getTime() - start.getTime());
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+
+      if (diffDays <= 45) {
+        const data = [];
+        for (let i = 0; i < diffDays; i++) {
+          const currentDate = addDays(start, i);
+          const dateStr = format(currentDate, 'yyyy-MM-dd');
+          const dayOrders = activeOrders.filter(o => format(getOrderDate(o), 'yyyy-MM-dd') === dateStr);
+          const dayExpenses = monthlyExpenses.filter(e => format(getExpenseDate(e), 'yyyy-MM-dd') === dateStr);
+
+          data.push({
+            label: format(currentDate, 'MMM d'),
+            Invoiced: dayOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0),
+            Collected: dayOrders.reduce((sum, o) => sum + (o.paidAmount || 0), 0),
+            Expenses: dayExpenses.reduce((sum, e) => sum + (e.amount || 0), 0),
+          });
+        }
+        return data;
+      } else {
+        const dataMap: Record<string, { label: string; Invoiced: number; Collected: number; Expenses: number }> = {};
+        
+        activeOrders.forEach(o => {
+          const d = getOrderDate(o);
+          const monthStr = format(d, 'MMM yyyy');
+          if (!dataMap[monthStr]) {
+            dataMap[monthStr] = { label: monthStr, Invoiced: 0, Collected: 0, Expenses: 0 };
+          }
+          dataMap[monthStr].Invoiced += (o.totalAmount || 0);
+          dataMap[monthStr].Collected += (o.paidAmount || 0);
+        });
+
+        monthlyExpenses.forEach(e => {
+          const d = getExpenseDate(e);
+          const monthStr = format(d, 'MMM yyyy');
+          if (!dataMap[monthStr]) {
+            dataMap[monthStr] = { label: monthStr, Invoiced: 0, Collected: 0, Expenses: 0 };
+          }
+          dataMap[monthStr].Expenses += (e.amount || 0);
+        });
+
+        return Object.values(dataMap).sort((a, b) => {
+          const dateA = new Date(a.label);
+          const dateB = new Date(b.label);
+          return dateA.getTime() - dateB.getTime();
+        });
+      }
+    }
+  };
+
+  const dailyChartData = getDailyChartData();
 
   // Month navigation helpers
   const handlePrevMonth = () => {
@@ -4975,6 +5168,20 @@ function MonthlyReportView({
       setSelectedYear(y => y + 1);
     } else {
       setSelectedMonth(m => m + 1);
+    }
+  };
+
+  const handleApplyPreset = (preset: 'last7' | 'last30' | 'thisYear') => {
+    const today = new Date();
+    if (preset === 'last7') {
+      setCustomStartDate(format(addDays(today, -6), 'yyyy-MM-dd'));
+      setCustomEndDate(format(today, 'yyyy-MM-dd'));
+    } else if (preset === 'last30') {
+      setCustomStartDate(format(addDays(today, -29), 'yyyy-MM-dd'));
+      setCustomEndDate(format(today, 'yyyy-MM-dd'));
+    } else if (preset === 'thisYear') {
+      setCustomStartDate(format(new Date(today.getFullYear(), 0, 1), 'yyyy-MM-dd'));
+      setCustomEndDate(format(new Date(today.getFullYear(), 11, 31), 'yyyy-MM-dd'));
     }
   };
 
@@ -5013,37 +5220,119 @@ function MonthlyReportView({
   return (
     <div className="space-y-6">
       {/* Interactive Month Selection Controls (Hidden on Print) */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-4 lg:p-6 rounded-2xl shadow-sm border border-slate-200 print:hidden animate-in fade-in duration-300">
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="icon" className="h-10 w-10 border-slate-200" onClick={handlePrevMonth}>
-            <ChevronLeft className="w-5 h-5" />
-          </Button>
-          <div className="flex gap-2">
-            <Select value={selectedMonth.toString()} onValueChange={(val) => setSelectedMonth(Number(val))}>
-              <SelectTrigger className="w-[140px] font-medium bg-white border-slate-200">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {MONTHS.map((name, idx) => (
-                  <SelectItem key={idx} value={idx.toString()}>{name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            <Select value={selectedYear.toString()} onValueChange={(val) => setSelectedYear(Number(val))}>
-              <SelectTrigger className="w-[110px] font-medium bg-white border-slate-200">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {YEARS.map((year) => (
-                  <SelectItem key={year} value={year.toString()}>{year}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white p-4 lg:p-6 rounded-2xl shadow-sm border border-slate-200 print:hidden animate-in fade-in duration-300">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+          {/* View mode toggle */}
+          <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 w-fit shadow-inner">
+            <button
+              type="button"
+              className={cn(
+                "px-3 py-1.5 text-xs font-bold rounded-lg transition-all",
+                reportMode === 'monthly'
+                  ? "bg-white text-slate-800 shadow-sm"
+                  : "text-slate-500 hover:text-slate-800"
+              )}
+              onClick={() => setReportMode('monthly')}
+            >
+              Monthly View
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "px-3 py-1.5 text-xs font-bold rounded-lg transition-all",
+                reportMode === 'custom'
+                  ? "bg-white text-slate-800 shadow-sm"
+                  : "text-slate-500 hover:text-slate-800"
+              )}
+              onClick={() => setReportMode('custom')}
+            >
+              Custom Range
+            </button>
           </div>
-          <Button variant="outline" size="icon" className="h-10 w-10 border-slate-200" onClick={handleNextMonth}>
-            <ChevronRight className="w-5 h-5" />
-          </Button>
+
+          {reportMode === 'monthly' ? (
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="icon" className="h-10 w-10 border-slate-200" onClick={handlePrevMonth}>
+                <ChevronLeft className="w-5 h-5" />
+              </Button>
+              <div className="flex gap-2">
+                <Select value={selectedMonth.toString()} onValueChange={(val) => setSelectedMonth(Number(val))}>
+                  <SelectTrigger className="w-[140px] font-medium bg-white border-slate-200">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MONTHS.map((name, idx) => (
+                      <SelectItem key={idx} value={idx.toString()}>{name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                <Select value={selectedYear.toString()} onValueChange={(val) => setSelectedYear(Number(val))}>
+                  <SelectTrigger className="w-[110px] font-medium bg-white border-slate-200">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {YEARS.map((year) => (
+                      <SelectItem key={year} value={year.toString()}>{year}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button variant="outline" size="icon" className="h-10 w-10 border-slate-200" onClick={handleNextMonth}>
+                <ChevronRight className="w-5 h-5" />
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+              <div className="flex items-center gap-2">
+                <div className="flex flex-col">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase mb-0.5">Start Date</span>
+                  <Input 
+                    type="date" 
+                    value={customStartDate} 
+                    onChange={(e) => setCustomStartDate(e.target.value)} 
+                    className="h-10 text-sm bg-white border-slate-200 focus:ring-blue-500 focus:border-blue-500 w-[145px]" 
+                  />
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase mb-0.5">End Date</span>
+                  <Input 
+                    type="date" 
+                    value={customEndDate} 
+                    onChange={(e) => setCustomEndDate(e.target.value)} 
+                    className="h-10 text-sm bg-white border-slate-200 focus:ring-blue-500 focus:border-blue-500 w-[145px]" 
+                  />
+                </div>
+              </div>
+              {/* Presets */}
+              <div className="flex items-center gap-1.5 h-10">
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={() => handleApplyPreset('last7')} 
+                  className="h-8 text-[11px] font-bold border-slate-200 hover:bg-slate-50 px-2.5 rounded-lg text-slate-600"
+                >
+                  7 Days
+                </Button>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={() => handleApplyPreset('last30')} 
+                  className="h-8 text-[11px] font-bold border-slate-200 hover:bg-slate-50 px-2.5 rounded-lg text-slate-600"
+                >
+                  30 Days
+                </Button>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={() => handleApplyPreset('thisYear')} 
+                  className="h-8 text-[11px] font-bold border-slate-200 hover:bg-slate-50 px-2.5 rounded-lg text-slate-600"
+                >
+                  This Year
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -5162,7 +5451,7 @@ function MonthlyReportView({
             <Calendar className="w-12 h-12 text-slate-400" />
           </div>
           <h3 className="text-lg font-bold text-slate-900">No transactions recorded</h3>
-          <p className="text-sm text-slate-500 max-w-sm mt-1">There are no jobs or operating expenses logged in {MONTHS[selectedMonth]} {selectedYear}.</p>
+          <p className="text-sm text-slate-500 max-w-sm mt-1">There are no jobs or operating expenses logged in {periodTitle}.</p>
         </div>
       ) : (
         /* Printable Report Sheet */
@@ -5180,13 +5469,13 @@ function MonthlyReportView({
             </div>
             <div className="text-right">
               <h2 className="text-sm font-bold tracking-tight text-blue-600 uppercase">Financial Statement</h2>
-              <p className="text-2xl font-bold text-slate-800 mt-1">{MONTHS[selectedMonth]} {selectedYear}</p>
+              <p className="text-2xl font-bold text-slate-800 mt-1">{periodTitle}</p>
               <p className="text-[10px] text-slate-400 mt-1 uppercase font-semibold">Generated on: {format(new Date(), 'PPpp')}</p>
             </div>
           </div>
 
           <div className="print:hidden">
-            <h2 className="text-lg font-bold text-slate-900">Monthly Statement for {MONTHS[selectedMonth]} {selectedYear}</h2>
+            <h2 className="text-lg font-bold text-slate-900">Statement for {periodTitle}</h2>
             <p className="text-xs text-slate-500">Summary of all printing jobs, customer billings, and operational expenses.</p>
           </div>
 

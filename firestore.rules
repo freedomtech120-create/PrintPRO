@@ -109,8 +109,8 @@ service cloud.firestore {
       allow list: if isSignedIn() && (isOwner(resource.data.tenantId) || isAdmin());
       allow create: if isEmailVerified() && isOwner(incoming().tenantId) && isValidOrder(incoming())
         && isValidId(orderId)
-        && existsAfter(/databases/$(database)/documents/settings/$(incoming().tenantId))
-        && incoming().createdAt == request.time;
+        && exists(/databases/$(database)/documents/settings/$(incoming().tenantId))
+        && (incoming().createdAt is timestamp || incoming().createdAt == request.time);
       allow update: if isEmailVerified() && (isOwner(existing().tenantId) || isAdmin()) && isValidOrder(incoming())
         && incoming().tenantId == existing().tenantId
         && incoming().updatedAt == request.time
