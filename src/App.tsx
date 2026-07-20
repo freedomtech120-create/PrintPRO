@@ -279,7 +279,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 /// Types
-import { Order, Expense, Customer, Product, BusinessSettings, OrderStatus, PaymentStatus, OrderItem, Tenant, PlatformSettings } from './types';
+import { Order, Expense, ExpenseItem, Customer, Product, BusinessSettings, OrderStatus, PaymentStatus, OrderItem, Tenant, PlatformSettings } from './types';
 
 const ADMIN_EMAIL = 'freedomtech120@gmail.com';
 const PAYSTACK_PUBLIC_KEY = (import.meta as any).env.VITE_PAYSTACK_PUBLIC_KEY || '';
@@ -2450,21 +2450,61 @@ function SubscriptionView({ tenant, settings, user, onLogout }: {
 
 function DashboardView({ orders, expenses, settings }: { orders: Order[], expenses: Expense[], settings: BusinessSettings | null }) {
   const currentMonth = new Date();
-  const startOfCurrentMonth = startOfMonth(currentMonth);
-  const endOfCurrentMonth = endOfMonth(currentMonth);
 
-  const monthlyOrders = orders.filter(o => {
-    const date = o.createdAt instanceof Timestamp ? o.createdAt.toDate() : new Date(o.createdAt);
-    return isWithinInterval(date, { start: startOfCurrentMonth, end: endOfCurrentMonth });
-  });
+  // Dynamic list of unique months in database
+  const uniqueMonths = React.useMemo(() => {
+    const monthsSet = new Set<string>();
+    monthsSet.add(format(new Date(), 'yyyy-MM'));
+    
+    orders.forEach(o => {
+      try {
+        const d = o.createdAt instanceof Timestamp ? o.createdAt.toDate() : new Date(o.createdAt);
+        if (d && !isNaN(d.getTime())) {
+          monthsSet.add(format(d, 'yyyy-MM'));
+        }
+      } catch (_) {}
+    });
 
-  const monthlyExpenses = expenses.filter(e => {
-    const date = e.date instanceof Timestamp ? e.date.toDate() : new Date(e.date);
-    return isWithinInterval(date, { start: startOfCurrentMonth, end: endOfCurrentMonth });
-  });
+    expenses.forEach(e => {
+      try {
+        const d = e.date instanceof Timestamp ? e.date.toDate() : new Date(e.date);
+        if (d && !isNaN(d.getTime())) {
+          monthsSet.add(format(d, 'yyyy-MM'));
+        }
+      } catch (_) {}
+    });
 
-  const totalRevenue = monthlyOrders.reduce((sum, o) => sum + o.totalAmount, 0);
-  const totalExpenses = monthlyExpenses.reduce((sum, e) => sum + e.amount, 0);
+    return Array.from(monthsSet).sort().reverse();
+  }, [orders, expenses]);
+
+  const [selectedPeriod, setSelectedPeriod] = useState<string>(format(new Date(), 'yyyy-MM'));
+
+  const filteredOrders = React.useMemo(() => {
+    if (selectedPeriod === 'all') return orders;
+    return orders.filter(o => {
+      try {
+        const d = o.createdAt instanceof Timestamp ? o.createdAt.toDate() : new Date(o.createdAt);
+        return format(d, 'yyyy-MM') === selectedPeriod;
+      } catch (_) {
+        return false;
+      }
+    });
+  }, [orders, selectedPeriod]);
+
+  const filteredExpenses = React.useMemo(() => {
+    if (selectedPeriod === 'all') return expenses;
+    return expenses.filter(e => {
+      try {
+        const d = e.date instanceof Timestamp ? e.date.toDate() : new Date(e.date);
+        return format(d, 'yyyy-MM') === selectedPeriod;
+      } catch (_) {
+        return false;
+      }
+    });
+  }, [expenses, selectedPeriod]);
+
+  const totalRevenue = filteredOrders.reduce((sum, o) => sum + o.totalAmount, 0);
+  const totalExpenses = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
   const netProfit = totalRevenue - totalExpenses;
 
   // Chart Data
@@ -2495,28 +2535,61 @@ function DashboardView({ orders, expenses, settings }: { orders: Order[], expens
     };
   });
 
+  const periodLabel = selectedPeriod === 'all' 
+    ? 'All Time' 
+    : format(new Date(selectedPeriod + '-02'), 'MMMM yyyy');
+
   return (
     <div className="space-y-8">
+      {/* Period Selector Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+        <div>
+          <h2 className="text-xl font-bold text-slate-900">Business Dashboard</h2>
+          <p className="text-xs text-slate-500 mt-0.5">Monitor your sales, expenses, and overall financial health</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-semibold text-slate-500 whitespace-nowrap">Report Period:</span>
+          <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
+            <SelectTrigger className="w-[200px] bg-slate-50 border-slate-200 text-slate-800 text-xs font-bold">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all" className="text-xs font-semibold">All Time (Whole Report)</SelectItem>
+              {uniqueMonths.map(monthStr => {
+                const [year, month] = monthStr.split('-');
+                const monthDate = new Date(Number(year), Number(month) - 1, 1);
+                const label = format(monthDate, 'MMMM yyyy');
+                return (
+                  <SelectItem key={monthStr} value={monthStr} className="text-xs">
+                    {label}
+                  </SelectItem>
+                );
+              })}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <StatCard 
-          title="Monthly Revenue" 
-          value={`${settings?.currencySymbol || 'GH₵'}${totalRevenue.toLocaleString()}`} 
+          title={selectedPeriod === 'all' ? "All-Time Revenue" : "Revenue"} 
+          value={`${settings?.currencySymbol || 'GH₵'}${totalRevenue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`} 
           icon={<TrendingUp className="w-6 h-6 text-green-600" />}
-          trend="+12% from last month"
+          trend={`Total sales for ${periodLabel}`}
           color="green"
         />
         <StatCard 
-          title="Monthly Expenses" 
-          value={`${settings?.currencySymbol || 'GH₵'}${totalExpenses.toLocaleString()}`} 
+          title={selectedPeriod === 'all' ? "All-Time Expenses" : "Expenses"} 
+          value={`${settings?.currencySymbol || 'GH₵'}${totalExpenses.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`} 
           icon={<TrendingDown className="w-6 h-6 text-red-600" />}
-          trend="+5% from last month"
+          trend={`Total costs for ${periodLabel}`}
           color="red"
         />
         <StatCard 
-          title="Net Profit" 
-          value={`${settings?.currencySymbol || 'GH₵'}${netProfit.toLocaleString()}`} 
+          title={selectedPeriod === 'all' ? "All-Time Net Profit" : "Net Profit"} 
+          value={`${settings?.currencySymbol || 'GH₵'}${netProfit.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`} 
           icon={<Coins className="w-6 h-6 text-blue-600" />}
-          trend="+18% from last month"
+          trend={`Earnings after expenses for ${periodLabel}`}
           color="blue"
         />
       </div>
@@ -4312,33 +4385,174 @@ function ExpensesView({ expenses, settings, user }: { expenses: Expense[], setti
 
   const [createError, setCreateError] = useState<string | null>(null);
 
+  // New Expense multi-item and custom date states
+  const [newExpenseItems, setNewExpenseItems] = useState<ExpenseItem[]>([]);
+  const [itemDesc, setItemDesc] = useState('');
+  const [itemAmt, setItemAmt] = useState('0');
+  const [newExpenseDateMode, setNewExpenseDateMode] = useState<'current' | 'custom'>('current');
+  const [newCustomExpenseDate, setNewCustomExpenseDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+
+  // Edit Expense states
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editCategory, setEditCategory] = useState<string>('supplies');
+  const [editExpenseItems, setEditExpenseItems] = useState<ExpenseItem[]>([]);
+  const [editItemDesc, setEditItemDesc] = useState('');
+  const [editItemAmt, setEditItemAmt] = useState('0');
+  const [editExpenseDateMode, setEditExpenseDateMode] = useState<'original' | 'current' | 'custom'>('original');
+  const [editCustomExpenseDate, setEditCustomExpenseDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+
+  const handleAddNewDraftItem = () => {
+    if (!itemDesc.trim()) return;
+    const amt = parseFloat(itemAmt) || 0;
+    setNewExpenseItems([...newExpenseItems, { description: itemDesc.trim(), amount: amt }]);
+    setItemDesc('');
+    setItemAmt('0');
+  };
+
+  const handleRemoveNewDraftItem = (index: number) => {
+    setNewExpenseItems(newExpenseItems.filter((_, i) => i !== index));
+  };
+
+  const handleAddEditDraftItem = () => {
+    if (!editItemDesc.trim()) return;
+    const amt = parseFloat(editItemAmt) || 0;
+    setEditExpenseItems([...editExpenseItems, { description: editItemDesc.trim(), amount: amt }]);
+    setEditItemDesc('');
+    setEditItemAmt('0');
+  };
+
+  const handleRemoveEditDraftItem = (index: number) => {
+    setEditExpenseItems(editExpenseItems.filter((_, i) => i !== index));
+  };
+
+  const startEditExpense = (expense: Expense) => {
+    setEditingExpense(expense);
+    setEditCategory(expense.category || 'supplies');
+    setEditExpenseItems(expense.items || [{ description: expense.description, amount: expense.amount }]);
+    setEditItemDesc('');
+    setEditItemAmt('0');
+    setEditExpenseDateMode('original');
+    
+    const d = expense.date instanceof Timestamp ? expense.date.toDate() : new Date(expense.date);
+    setEditCustomExpenseDate(format(d, 'yyyy-MM-dd'));
+    setEditError(null);
+  };
+
   const handleAddExpense = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setCreateError(null);
     const formData = new FormData(e.currentTarget);
     
+    const descInput = formData.get('description') as string;
+    const amtInput = parseFloat(formData.get('amount') as string) || 0;
+
+    let itemsToSave: ExpenseItem[] = [];
+    let mainDescription = "";
+    let totalAmount = 0;
+
+    if (newExpenseItems.length > 0) {
+      itemsToSave = newExpenseItems;
+      mainDescription = newExpenseItems.map(item => item.description).join(', ');
+      totalAmount = newExpenseItems.reduce((sum, item) => sum + item.amount, 0);
+    } else {
+      if (!descInput || !descInput.trim()) {
+        setCreateError("Please enter a description or add some items first.");
+        return;
+      }
+      itemsToSave = [{ description: descInput.trim(), amount: amtInput }];
+      mainDescription = descInput.trim();
+      totalAmount = amtInput;
+    }
+
+    const dateToUse = newExpenseDateMode === 'custom' && newCustomExpenseDate
+      ? Timestamp.fromDate(new Date(newCustomExpenseDate + 'T12:00:00'))
+      : serverTimestamp();
+
     const newExpense: Omit<Expense, 'id'> = {
       tenantId: user.uid,
-      description: formData.get('description') as string,
-      amount: Number(formData.get('amount')),
+      description: mainDescription,
+      amount: totalAmount,
       category: formData.get('category') as string,
-      date: serverTimestamp(),
-      createdBy: user.uid
+      date: dateToUse,
+      createdBy: user.uid,
+      items: itemsToSave
     };
 
     try {
       setIsSubmitting(true);
       await addDoc(collection(db, 'expenses'), newExpense);
       setIsNewExpenseOpen(false);
+      
+      // Reset
+      setNewExpenseItems([]);
+      setItemDesc('');
+      setItemAmt('0');
+      setNewExpenseDateMode('current');
+      setNewCustomExpenseDate(format(new Date(), 'yyyy-MM-dd'));
     } catch (error: any) {
       console.error("Error creating expense:", error);
       const friendlyMsg = error?.message?.includes("permission-denied") || error?.code === "permission-denied"
         ? "Access Denied: You do not have permission to add expenses. Please verify your account setup."
         : (error?.message || "An unexpected error occurred while saving the expense.");
       setCreateError(friendlyMsg);
-      try {
-        handleFirestoreError(error, OperationType.CREATE, 'expenses');
-      } catch (fe) {}
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleUpdateExpense = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!editingExpense) return;
+    setEditError(null);
+
+    const formData = new FormData(e.currentTarget);
+    const descInput = formData.get('editDescription') as string;
+    const amtInput = parseFloat(formData.get('editAmount') as string) || 0;
+
+    let itemsToSave: ExpenseItem[] = [];
+    let mainDescription = "";
+    let totalAmount = 0;
+
+    if (editExpenseItems.length > 0) {
+      itemsToSave = editExpenseItems;
+      mainDescription = editExpenseItems.map(item => item.description).join(', ');
+      totalAmount = editExpenseItems.reduce((sum, item) => sum + item.amount, 0);
+    } else {
+      if (!descInput || !descInput.trim()) {
+        setEditError("Please enter a description or add some items first.");
+        return;
+      }
+      itemsToSave = [{ description: descInput.trim(), amount: amtInput }];
+      mainDescription = descInput.trim();
+      totalAmount = amtInput;
+    }
+
+    let dateToUse = editingExpense.date;
+    if (editExpenseDateMode === 'current') {
+      dateToUse = serverTimestamp();
+    } else if (editExpenseDateMode === 'custom' && editCustomExpenseDate) {
+      dateToUse = Timestamp.fromDate(new Date(editCustomExpenseDate + 'T12:00:00'));
+    }
+
+    const updatedExpense: Partial<Expense> = {
+      description: mainDescription,
+      amount: totalAmount,
+      category: editCategory,
+      date: dateToUse,
+      items: itemsToSave
+    };
+
+    try {
+      setIsSubmitting(true);
+      await updateDoc(doc(db, 'expenses', editingExpense.id!), updatedExpense);
+      setEditingExpense(null);
+    } catch (error: any) {
+      console.error("Error updating expense:", error);
+      const friendlyMsg = error?.message?.includes("permission-denied") || error?.code === "permission-denied"
+        ? "Access Denied: You do not have permission to update this expense."
+        : (error?.message || "An unexpected error occurred while updating the expense.");
+      setEditError(friendlyMsg);
     } finally {
       setIsSubmitting(false);
     }
@@ -4362,18 +4576,27 @@ function ExpensesView({ expenses, settings, user }: { expenses: Expense[], setti
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h3 className="text-xl font-bold text-slate-900">Business Expenses</h3>
-        <Dialog open={isNewExpenseOpen} onOpenChange={(open) => { setIsNewExpenseOpen(open); if (!open) setCreateError(null); }}>
+        <Dialog open={isNewExpenseOpen} onOpenChange={(open) => { 
+          setIsNewExpenseOpen(open); 
+          if (!open) {
+            setCreateError(null);
+            setNewExpenseItems([]);
+            setItemDesc('');
+            setItemAmt('0');
+            setNewExpenseDateMode('current');
+          }
+        }}>
           <DialogTrigger render={
             <Button className="bg-blue-600 hover:bg-blue-700">
               <Plus className="w-4 h-4 mr-2" />
               Add Expense
             </Button>
           } />
-          <DialogContent>
+          <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto bg-white">
             <form onSubmit={handleAddExpense}>
               <DialogHeader>
-                <DialogTitle>Add New Expense</DialogTitle>
-                <DialogDescription>Record a business cost to track your profit accurately.</DialogDescription>
+                <DialogTitle className="text-slate-900 font-bold text-lg">Add New Expense</DialogTitle>
+                <DialogDescription className="text-slate-500 text-sm">Record a single business cost or add multiple items under one expense record.</DialogDescription>
               </DialogHeader>
               {createError && (
                 <div className="mx-6 mt-4 p-3 rounded-lg bg-red-50 border border-red-100 flex items-start gap-2 text-red-700 text-xs font-medium animate-in fade-in duration-200">
@@ -4381,19 +4604,12 @@ function ExpensesView({ expenses, settings, user }: { expenses: Expense[], setti
                   <div>{createError}</div>
                 </div>
               )}
-              <div className="grid gap-4 py-4">
+              <div className="grid gap-4 py-4 px-6 text-slate-900">
+                {/* Category Selector */}
                 <div className="grid gap-2">
-                  <Label htmlFor="description">Description</Label>
-                  <Input id="description" name="description" placeholder="e.g. Ink Cartridges" required />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="amount">Amount ({settings?.currencySymbol || 'GH₵'})</Label>
-                  <Input id="amount" name="amount" type="number" step="0.01" min="0" required />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="category">Category</Label>
-                  <Select name="category" required>
-                    <SelectTrigger>
+                  <Label htmlFor="category" className="font-bold text-slate-700">Category</Label>
+                  <Select name="category" defaultValue="supplies" required>
+                    <SelectTrigger id="category" className="bg-white">
                       <SelectValue placeholder="Select category" />
                     </SelectTrigger>
                     <SelectContent>
@@ -4405,9 +4621,169 @@ function ExpensesView({ expenses, settings, user }: { expenses: Expense[], setti
                     </SelectContent>
                   </Select>
                 </div>
+
+                {/* Added Items (Draft List) */}
+                <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50">
+                  <div className="flex items-center justify-between mb-3">
+                    <Label className="text-xs font-bold text-slate-800 uppercase tracking-wider">Expense Items ({newExpenseItems.length})</Label>
+                    {newExpenseItems.length > 0 && (
+                      <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-full">
+                        Subtotal: {settings?.currencySymbol || 'GH₵'}{newExpenseItems.reduce((sum, item) => sum + item.amount, 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                      </span>
+                    )}
+                  </div>
+                  
+                  {newExpenseItems.length === 0 ? (
+                    <div className="text-center py-6 text-xs text-slate-500 bg-white border border-dashed border-slate-200 rounded-lg">
+                      No items added yet. Use the "Configure & Add Item" section below, or use the single fallback entry below.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {newExpenseItems.map((item, index) => (
+                        <div key={index} className="flex items-start justify-between p-2.5 bg-white border border-slate-200 rounded-lg text-xs gap-3 animate-in fade-in-50">
+                          <div className="flex-1 min-w-0 text-left">
+                            <div className="font-semibold text-slate-800 truncate">{item.description}</div>
+                            <div className="text-slate-500 mt-0.5">Amount: {settings?.currencySymbol || 'GH₵'}{item.amount.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="font-bold text-slate-900">{settings?.currencySymbol || 'GH₵'}{item.amount.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="w-7 h-7 text-red-500 hover:text-red-700 hover:bg-red-50"
+                              onClick={() => handleRemoveNewDraftItem(index)}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Configure and Add Item */}
+                <div className="border border-slate-200 rounded-xl p-4 bg-white space-y-4 shadow-sm">
+                  <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
+                    <div className="w-5 h-5 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 font-bold text-[10px]">
+                      +
+                    </div>
+                    <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">Configure & Add Item</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="itemDesc" className="text-left font-medium">Item Description</Label>
+                      <Input 
+                        id="itemDesc" 
+                        value={itemDesc} 
+                        onChange={(e) => setItemDesc(e.target.value)} 
+                        placeholder="e.g. Epson Black Ink" 
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="itemAmt" className="text-left font-medium">Item Amount ({settings?.currencySymbol || 'GH₵'})</Label>
+                      <Input 
+                        id="itemAmt" 
+                        type="number" 
+                        step="0.01" 
+                        min="0" 
+                        value={itemAmt} 
+                        onChange={(e) => setItemAmt(e.target.value)} 
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end pt-1">
+                    <Button 
+                      type="button" 
+                      onClick={handleAddNewDraftItem}
+                      disabled={!itemDesc.trim()}
+                      className="bg-slate-800 hover:bg-slate-900 text-white font-bold h-9 text-xs px-4"
+                    >
+                      <Plus className="w-3.5 h-3.5 mr-1" /> Add Item
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Fallback Single Item Entry */}
+                {newExpenseItems.length === 0 && (
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                    <div className="text-xs font-bold text-slate-700 uppercase tracking-wider text-left">Single Item Entry (Fallback)</div>
+                    <p className="text-[11px] text-slate-500 text-left">If you only have a single expense item, you can just fill these fields directly.</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="grid gap-2">
+                        <Label htmlFor="description" className="text-left">Main Description</Label>
+                        <Input id="description" name="description" placeholder="e.g. Office Rental" />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="amount" className="text-left">Main Amount ({settings?.currencySymbol || 'GH₵'})</Label>
+                        <Input id="amount" name="amount" type="number" step="0.01" min="0" defaultValue="0" />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Preferred Date Selector & Total Summary */}
+                <div className="p-4 bg-blue-50/50 border border-blue-100 rounded-xl space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-bold text-blue-800">Total Expense Amount:</span>
+                    <span className="text-xl font-extrabold text-blue-900">
+                      {settings?.currencySymbol || 'GH₵'}
+                      {newExpenseItems.length > 0 
+                        ? newExpenseItems.reduce((sum, item) => sum + item.amount, 0).toLocaleString(undefined, {minimumFractionDigits: 2})
+                        : "0.00 (Single input fallback value will be used)"}
+                    </span>
+                  </div>
+
+                  <div className="grid gap-2 border-t border-blue-100/50 pt-3">
+                    <Label className="text-slate-700 font-medium text-left">Expense Date</Label>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant={newExpenseDateMode === 'current' ? 'default' : 'outline'}
+                        className={`flex-1 h-9 text-xs font-bold ${
+                          newExpenseDateMode === 'current' 
+                            ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                            : 'border-slate-200 text-slate-700 bg-white hover:bg-slate-50'
+                        }`}
+                        onClick={() => setNewExpenseDateMode('current')}
+                      >
+                        Current Date/Time
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={newExpenseDateMode === 'custom' ? 'default' : 'outline'}
+                        className={`flex-1 h-9 text-xs font-bold ${
+                          newExpenseDateMode === 'custom' 
+                            ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                            : 'border-slate-200 text-slate-700 bg-white hover:bg-slate-50'
+                        }`}
+                        onClick={() => setNewExpenseDateMode('custom')}
+                      >
+                        Set Preferred Date
+                      </Button>
+                    </div>
+                    {newExpenseDateMode === 'custom' && (
+                      <div className="mt-2 animate-in fade-in-50 duration-200">
+                        <Input
+                          type="date"
+                          value={newCustomExpenseDate}
+                          onChange={(e) => setNewCustomExpenseDate(e.target.value)}
+                          className="h-10 text-slate-900 bg-white border border-slate-200 rounded"
+                          required
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
-              <DialogFooter>
-                <Button type="submit" disabled={isSubmitting} className="bg-blue-600 hover:bg-blue-700 w-full">
+              <DialogFooter className="px-6 pb-6 pt-2 border-t border-slate-100 mt-2">
+                <Button type="button" variant="outline" onClick={() => setIsNewExpenseOpen(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={isSubmitting} className="bg-blue-600 hover:bg-blue-700 font-bold text-white">
                   {isSubmitting ? "Recording..." : "Record Expense"}
                 </Button>
               </DialogFooter>
@@ -4431,24 +4807,52 @@ function ExpensesView({ expenses, settings, user }: { expenses: Expense[], setti
             <TableBody>
               {expenses.map((expense) => (
                 <TableRow key={expense.id}>
-                  <TableCell className="font-medium">{expense.description}</TableCell>
-                  <TableCell>
+                  <TableCell className="font-medium text-left">
+                    <div className="font-bold text-slate-900">{expense.description}</div>
+                    {expense.items && expense.items.length > 0 && (
+                      <div className="mt-1.5 space-y-1">
+                        {expense.items.map((item, idx) => (
+                          <div key={idx} className="text-[10px] text-slate-500 flex justify-between max-w-sm bg-slate-50 border border-slate-100/80 px-2 py-0.5 rounded gap-4">
+                            <span className="truncate">• {item.description}</span>
+                            <span className="font-bold text-slate-700 shrink-0">
+                              {settings?.currencySymbol || 'GH₵'}
+                              {item.amount.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-left">
                     <Badge variant="outline" className="capitalize">{expense.category}</Badge>
                   </TableCell>
-                  <TableCell className="text-red-600 font-semibold">-{settings?.currencySymbol || 'GH₵'}{expense.amount.toLocaleString()}</TableCell>
-                  <TableCell className="text-slate-500">
+                  <TableCell className="text-red-600 font-semibold text-left">
+                    -{settings?.currencySymbol || 'GH₵'}{expense.amount.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                  </TableCell>
+                  <TableCell className="text-slate-500 text-left">
                     {format(expense.date instanceof Timestamp ? expense.date.toDate() : new Date(expense.date), 'MMM d, yyyy')}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button 
-                      variant="ghost" 
-                      size="icon" 
-                      className="h-8 w-8 text-slate-400 hover:text-red-600"
-                      title="Delete Expense"
-                      onClick={() => handleDeleteExpense(expense.id!)}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
+                    <div className="flex justify-end gap-2">
+                      <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        className="h-8 w-8 text-slate-400 hover:text-blue-600"
+                        title="Edit Expense"
+                        onClick={() => startEditExpense(expense)}
+                      >
+                        <Edit className="w-4 h-4" />
+                      </Button>
+                      <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        className="h-8 w-8 text-slate-400 hover:text-red-600"
+                        title="Delete Expense"
+                        onClick={() => handleDeleteExpense(expense.id!)}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -4457,6 +4861,7 @@ function ExpensesView({ expenses, settings, user }: { expenses: Expense[], setti
         </CardContent>
       </Card>
 
+      {/* Delete Confirmation Dialog */}
       <Dialog open={deleteExpenseId !== null} onOpenChange={(open) => { if (!open) setDeleteExpenseId(null); }}>
         <DialogContent className="sm:max-w-md bg-white">
           <DialogHeader>
@@ -4476,6 +4881,218 @@ function ExpensesView({ expenses, settings, user }: { expenses: Expense[], setti
               Delete Expense
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Expense Dialog */}
+      <Dialog open={editingExpense !== null} onOpenChange={(open) => { if (!open) setEditingExpense(null); }}>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto bg-white">
+          <form onSubmit={handleUpdateExpense}>
+            <DialogHeader>
+              <DialogTitle className="text-slate-900 font-bold text-lg">Edit Expense Record</DialogTitle>
+              <DialogDescription className="text-slate-500 text-sm">Update categories, itemized details, or modify the preferred date of this expense.</DialogDescription>
+            </DialogHeader>
+            {editError && (
+              <div className="mx-6 mt-4 p-3 rounded-lg bg-red-50 border border-red-100 flex items-start gap-2 text-red-700 text-xs font-medium animate-in fade-in duration-200">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-500" />
+                <div>{editError}</div>
+              </div>
+            )}
+            <div className="grid gap-4 py-4 px-6 text-slate-900">
+              {/* Category selection */}
+              <div className="grid gap-2">
+                <Label className="text-slate-700 font-bold text-left">Category</Label>
+                <Select value={editCategory} onValueChange={setEditCategory} required>
+                  <SelectTrigger className="bg-white">
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="supplies">Supplies</SelectItem>
+                    <SelectItem value="rent">Rent</SelectItem>
+                    <SelectItem value="utilities">Utilities</SelectItem>
+                    <SelectItem value="marketing">Marketing</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Added Items (Draft List) */}
+              <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50">
+                <div className="flex items-center justify-between mb-3">
+                  <Label className="text-xs font-bold text-slate-800 uppercase tracking-wider">Expense Items ({editExpenseItems.length})</Label>
+                  {editExpenseItems.length > 0 && (
+                    <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-full">
+                      Subtotal: {settings?.currencySymbol || 'GH₵'}{editExpenseItems.reduce((sum, item) => sum + item.amount, 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                    </span>
+                  )}
+                </div>
+                
+                {editExpenseItems.length === 0 ? (
+                  <div className="text-center py-6 text-xs text-slate-500 bg-white border border-dashed border-slate-200 rounded-lg">
+                    No items in this expense record. Use the section below to add items.
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {editExpenseItems.map((item, index) => (
+                      <div key={index} className="flex items-start justify-between p-2.5 bg-white border border-slate-200 rounded-lg text-xs gap-3 animate-in fade-in-50">
+                        <div className="flex-1 min-w-0 text-left">
+                          <div className="font-semibold text-slate-800 truncate">{item.description}</div>
+                          <div className="text-slate-500 mt-0.5">Amount: {settings?.currencySymbol || 'GH₵'}{item.amount.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="font-bold text-slate-900">{settings?.currencySymbol || 'GH₵'}{item.amount.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="w-7 h-7 text-red-500 hover:text-red-700 hover:bg-red-50"
+                            onClick={() => handleRemoveEditDraftItem(index)}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Configure and Add Item */}
+              <div className="border border-slate-200 rounded-xl p-4 bg-white space-y-4 shadow-sm">
+                <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
+                  <div className="w-5 h-5 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 font-bold text-[10px]">
+                    +
+                  </div>
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">Configure & Add Item</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="editItemDesc" className="text-left font-medium">Item Description</Label>
+                    <Input 
+                      id="editItemDesc" 
+                      value={editItemDesc} 
+                      onChange={(e) => setEditItemDesc(e.target.value)} 
+                      placeholder="e.g. Epson Black Ink" 
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="editItemAmt" className="text-left font-medium">Item Amount ({settings?.currencySymbol || 'GH₵'})</Label>
+                    <Input 
+                      id="editItemAmt" 
+                      type="number" 
+                      step="0.01" 
+                      min="0" 
+                      value={editItemAmt} 
+                      onChange={(e) => setEditItemAmt(e.target.value)} 
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-1">
+                  <Button 
+                    type="button" 
+                    onClick={handleAddEditDraftItem}
+                    disabled={!editItemDesc.trim()}
+                    className="bg-slate-800 hover:bg-slate-900 text-white font-bold h-9 text-xs px-4"
+                  >
+                    <Plus className="w-3.5 h-3.5 mr-1" /> Add Item
+                  </Button>
+                </div>
+              </div>
+
+              {/* Fallback inputs if list is empty */}
+              {editExpenseItems.length === 0 && (
+                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                  <div className="text-xs font-bold text-slate-700 uppercase tracking-wider text-left">Single Item Entry (Fallback)</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="editDescription" className="text-left">Main Description</Label>
+                      <Input id="editDescription" name="editDescription" defaultValue={editingExpense?.description || ''} />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="editAmount" className="text-left">Main Amount ({settings?.currencySymbol || 'GH₵'})</Label>
+                      <Input id="editAmount" name="editAmount" type="number" step="0.01" min="0" defaultValue={editingExpense?.amount || 0} />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Custom Preferred Date Picker & Total Summary */}
+              <div className="p-4 bg-blue-50/50 border border-blue-100 rounded-xl space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-bold text-blue-800">Total Expense Amount:</span>
+                  <span className="text-xl font-extrabold text-blue-900">
+                    {settings?.currencySymbol || 'GH₵'}
+                    {editExpenseItems.length > 0 
+                      ? editExpenseItems.reduce((sum, item) => sum + item.amount, 0).toLocaleString(undefined, {minimumFractionDigits: 2})
+                      : "0.00 (Single input fallback value will be used)"}
+                  </span>
+                </div>
+
+                <div className="grid gap-2 border-t border-blue-100/50 pt-3">
+                  <Label className="text-slate-700 font-medium text-left">Expense Date</Label>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant={editExpenseDateMode === 'original' ? 'default' : 'outline'}
+                      className={`flex-1 h-9 text-xs font-bold ${
+                        editExpenseDateMode === 'original' 
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                          : 'border-slate-200 text-slate-700 bg-white hover:bg-slate-50'
+                      }`}
+                      onClick={() => setEditExpenseDateMode('original')}
+                    >
+                      Keep Original
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={editExpenseDateMode === 'current' ? 'default' : 'outline'}
+                      className={`flex-1 h-9 text-xs font-bold ${
+                        editExpenseDateMode === 'current' 
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                          : 'border-slate-200 text-slate-700 bg-white hover:bg-slate-50'
+                      }`}
+                      onClick={() => setEditExpenseDateMode('current')}
+                    >
+                      Current Date/Time
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={editExpenseDateMode === 'custom' ? 'default' : 'outline'}
+                      className={`flex-1 h-9 text-xs font-bold ${
+                        editExpenseDateMode === 'custom' 
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                          : 'border-slate-200 text-slate-700 bg-white hover:bg-slate-50'
+                      }`}
+                      onClick={() => setEditExpenseDateMode('custom')}
+                    >
+                      Set Preferred Date
+                    </Button>
+                  </div>
+                  {editExpenseDateMode === 'custom' && (
+                    <div className="mt-2 animate-in fade-in-50 duration-200">
+                      <Input
+                        type="date"
+                        value={editCustomExpenseDate}
+                        onChange={(e) => setEditCustomExpenseDate(e.target.value)}
+                        className="h-10 text-slate-900 bg-white border border-slate-200 rounded"
+                        required
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            <DialogFooter className="border-t border-slate-100 pt-4 mt-2 px-6 pb-6">
+              <Button type="button" variant="outline" onClick={() => setEditingExpense(null)} className="font-semibold">
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isSubmitting} className="bg-blue-600 hover:bg-blue-700 text-white font-bold">
+                {isSubmitting ? "Updating..." : "Update Expense"}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

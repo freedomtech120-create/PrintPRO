@@ -28,6 +28,11 @@ export interface Order {
   createdBy: string;
 }
 
+export interface ExpenseItem {
+  description: string;
+  amount: number;
+}
+
 export interface Expense {
   id?: string;
   tenantId: string;
@@ -36,6 +41,7 @@ export interface Expense {
   category: string;
   date: any;
   createdBy: string;
+  items?: ExpenseItem[];
 }
 
 export interface Customer {
