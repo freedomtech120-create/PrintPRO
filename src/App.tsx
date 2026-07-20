@@ -2672,6 +2672,11 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
   const [orderDateMode, setOrderDateMode] = useState<'current' | 'custom'>('current');
   const [customOrderDate, setCustomOrderDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
 
+  // Multi-item Order State
+  const [newOrderItems, setNewOrderItems] = useState<OrderItem[]>([]);
+  const [editOrderItems, setEditOrderItems] = useState<OrderItem[]>([]);
+  const [description, setDescription] = useState<string>('');
+
   // Order Editing State
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
   const [editPricingMode, setEditPricingMode] = useState<'standard' | 'area'>('standard');
@@ -2695,38 +2700,86 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
     }
   }, [editPricingMode, editSelectedProduct, editWidth, editHeight]);
 
+  const handleAddDraftItem = () => {
+    if (!description.trim()) return;
+    const qty = Number(quantity);
+    const uPrice = Number(unitPrice);
+    const total = qty * uPrice;
+    
+    const item: OrderItem = {
+      description: description,
+      productId: selectedProduct?.id || null,
+      quantity: qty,
+      unitPrice: uPrice,
+      width: pricingMode === 'area' ? Number(width) : null,
+      height: pricingMode === 'area' ? Number(height) : null,
+      area: pricingMode === 'area' ? (Number(width) * Number(height)) : null,
+      total: total
+    };
+    
+    setNewOrderItems([...newOrderItems, item]);
+    
+    // Reset item configuration states
+    setDescription('');
+    setPricingMode('standard');
+    setSelectedProduct(null);
+    setWidth('0');
+    setHeight('0');
+    setQuantity('1');
+    setUnitPrice('0');
+  };
+
+  const handleRemoveDraftItem = (index: number) => {
+    setNewOrderItems(newOrderItems.filter((_, i) => i !== index));
+  };
+
+  const handleAddEditDraftItem = () => {
+    if (!editDescription.trim()) return;
+    const qty = Number(editQuantity);
+    const uPrice = Number(editUnitPrice);
+    const total = qty * uPrice;
+    
+    const item: OrderItem = {
+      description: editDescription,
+      productId: editSelectedProduct?.id || null,
+      quantity: qty,
+      unitPrice: uPrice,
+      width: editPricingMode === 'area' ? Number(editWidth) : null,
+      height: editPricingMode === 'area' ? Number(editHeight) : null,
+      area: editPricingMode === 'area' ? (Number(editWidth) * Number(editHeight)) : null,
+      total: total
+    };
+    
+    setEditOrderItems([...editOrderItems, item]);
+    
+    // Reset edit item configuration states
+    setEditDescription('');
+    setEditPricingMode('standard');
+    setEditSelectedProduct(null);
+    setEditWidth('0');
+    setEditHeight('0');
+    setEditQuantity('1');
+    setEditUnitPrice('0');
+  };
+
+  const handleRemoveEditDraftItem = (index: number) => {
+    setEditOrderItems(editOrderItems.filter((_, i) => i !== index));
+  };
+
   const startEditOrder = (order: Order) => {
     setEditingOrder(order);
     setEditCustomerId(order.customerId);
-    const item = order.items[0];
-    if (item) {
-      setEditDescription(item.description || '');
-      setEditQuantity(String(item.quantity || 1));
-      setEditUnitPrice(String(item.unitPrice || 0));
-      if (item.width !== null && item.width !== undefined && item.height !== null && item.height !== undefined) {
-        setEditPricingMode('area');
-        setEditWidth(String(item.width));
-        setEditHeight(String(item.height));
-        if (item.productId) {
-          setEditSelectedProduct(products.find(p => p.id === item.productId) || null);
-        } else {
-          setEditSelectedProduct(null);
-        }
-      } else {
-        setEditPricingMode('standard');
-        setEditWidth('0');
-        setEditHeight('0');
-        setEditSelectedProduct(null);
-      }
-    } else {
-      setEditDescription('');
-      setEditQuantity('1');
-      setEditUnitPrice('0');
-      setEditPricingMode('standard');
-      setEditWidth('0');
-      setEditHeight('0');
-      setEditSelectedProduct(null);
-    }
+    setEditOrderItems(order.items || []);
+    
+    // Clear editing item fields so they are clean to add more
+    setEditDescription('');
+    setEditQuantity('1');
+    setEditUnitPrice('0');
+    setEditPricingMode('standard');
+    setEditWidth('0');
+    setEditHeight('0');
+    setEditSelectedProduct(null);
+    
     setEditPaidAmount(String(order.paidAmount || 0));
 
     // Handle editing date initial states
@@ -2795,13 +2848,22 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
   const handleAddOrder = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setCreateError(null);
+    
+    if (newOrderItems.length === 0) {
+      setCreateError("Please add at least one job to the order.");
+      return;
+    }
+
     const formData = new FormData(e.currentTarget);
     const customerId = formData.get('customerId') as string;
     const customer = customers.find(c => c.id === customerId);
-    
-    const qty = Number(quantity);
-    const uPrice = Number(unitPrice);
-    const total = qty * uPrice;
+    if (!customerId) {
+      setCreateError("Please select a customer.");
+      return;
+    }
+
+    const total = newOrderItems.reduce((sum, item) => sum + item.total, 0);
+    const paidAmt = Number(formData.get('paidAmount') || 0);
 
     setIsSubmitting(true);
 
@@ -2811,30 +2873,19 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
     const invoiceNumberString = `${invPrefix}-${invNumber.toString().padStart(4, '0')}`;
 
     const dateToUse = orderDateMode === 'custom' && customOrderDate
-      ? Timestamp.fromDate(new Date(customOrderDate + 'T12:00:00'))
-      : serverTimestamp();
+       ? Timestamp.fromDate(new Date(customOrderDate + 'T12:00:00'))
+       : serverTimestamp();
 
     const newOrder: Omit<Order, 'id'> = {
       tenantId: user.uid,
       invoiceNumber: invoiceNumberString,
       customerId,
       customerName: customer?.name || 'Unknown',
-      items: [
-        { 
-          description: formData.get('description') as string,
-          productId: selectedProduct?.id || null,
-          quantity: qty, 
-          unitPrice: uPrice,
-          width: pricingMode === 'area' ? Number(width) : null,
-          height: pricingMode === 'area' ? Number(height) : null,
-          area: pricingMode === 'area' ? (Number(width) * Number(height)) : null,
-          total: total
-        }
-      ],
+      items: newOrderItems,
       totalAmount: total,
-      paidAmount: Number(formData.get('paidAmount')),
+      paidAmount: paidAmt,
       status: 'pending',
-      paymentStatus: Number(formData.get('paidAmount')) >= total ? 'paid' : (Number(formData.get('paidAmount')) > 0 ? 'partial' : 'unpaid'),
+      paymentStatus: paidAmt >= total ? 'paid' : (paidAmt > 0 ? 'partial' : 'unpaid'),
       createdAt: dateToUse,
       updatedAt: serverTimestamp(),
       createdBy: user.uid
@@ -2850,12 +2901,14 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
 
       setIsNewOrderOpen(false);
       // Reset form
+      setNewOrderItems([]);
       setPricingMode('standard');
       setSelectedProduct(null);
       setWidth('0');
       setHeight('0');
       setQuantity('1');
       setUnitPrice('0');
+      setDescription('');
       setOrderDateMode('current');
       setCustomOrderDate(format(new Date(), 'yyyy-MM-dd'));
     } catch (error: any) {
@@ -2942,11 +2995,14 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
     if (!editingOrder) return;
     setEditError(null);
 
+    if (editOrderItems.length === 0) {
+      setEditError("Please add at least one job to the order.");
+      return;
+    }
+
     const customer = customers.find(c => c.id === editCustomerId);
     
-    const qty = Number(editQuantity);
-    const uPrice = Number(editUnitPrice);
-    const total = qty * uPrice;
+    const total = editOrderItems.reduce((sum, item) => sum + item.total, 0);
     const paidAmt = Number(editPaidAmount);
 
     setIsSubmitting(true);
@@ -2954,18 +3010,7 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
     const updatedOrder: Partial<Order> = {
       customerId: editCustomerId,
       customerName: customer?.name || 'Unknown',
-      items: [
-        { 
-          description: editDescription,
-          productId: editSelectedProduct?.id || null,
-          quantity: qty, 
-          unitPrice: uPrice,
-          width: editPricingMode === 'area' ? Number(editWidth) : null,
-          height: editPricingMode === 'area' ? Number(editHeight) : null,
-          area: editPricingMode === 'area' ? (Number(editWidth) * Number(editHeight)) : null,
-          total: total
-        }
-      ],
+      items: editOrderItems,
       totalAmount: total,
       paidAmount: paidAmt,
       paymentStatus: paidAmt >= total ? 'paid' : (paidAmt > 0 ? 'partial' : 'unpaid'),
@@ -2981,6 +3026,7 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
     try {
       await updateDoc(doc(db, 'orders', editingOrder.id!), updatedOrder);
       setEditingOrder(null);
+      setEditOrderItems([]);
     } catch (error: any) {
       console.error("Error updating order:", error);
       const friendlyMsg = error?.message?.includes("permission-denied") || error?.code === "permission-denied"
@@ -3139,11 +3185,11 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
                   New Order
                 </Button>
               } />
-              <DialogContent className="sm:max-w-lg">
+              <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
             <form onSubmit={handleAddOrder}>
               <DialogHeader>
                 <DialogTitle>Create New Order</DialogTitle>
-                <DialogDescription>Enter the details for the new printing job.</DialogDescription>
+                <DialogDescription>Enter the details to configure and add multiple jobs for this order.</DialogDescription>
               </DialogHeader>
               {createError && (
                 <div className="mx-6 mt-4 p-3 rounded-lg bg-red-50 border border-red-100 flex items-start gap-2 text-red-700 text-xs font-medium animate-in fade-in duration-200">
@@ -3204,132 +3250,217 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
                   </Dialog>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="grid gap-2">
-                    <Label>Pricing Mode</Label>
-                    <Select value={pricingMode} onValueChange={(v: any) => setPricingMode(v)}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="standard">Standard</SelectItem>
-                        <SelectItem value="area">Area-Based (Sq Ft)</SelectItem>
-                      </SelectContent>
-                    </Select>
+                {/* Added Jobs List (Draft) */}
+                <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50">
+                  <div className="flex items-center justify-between mb-3">
+                    <Label className="text-xs font-bold text-slate-800 uppercase tracking-wider">Jobs in this Order ({newOrderItems.length})</Label>
+                    {newOrderItems.length > 0 && (
+                      <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-full">
+                        Subtotal: {settings?.currencySymbol || 'GH₵'}{newOrderItems.reduce((sum, item) => sum + item.total, 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                      </span>
+                    )}
                   </div>
-                  {pricingMode === 'area' && (
+                  
+                  {newOrderItems.length === 0 ? (
+                    <div className="text-center py-6 text-xs text-slate-500 bg-white border border-dashed border-slate-200 rounded-lg">
+                      No jobs added yet. Use the "Configure a Job" section below to build this order.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {newOrderItems.map((item, index) => (
+                        <div key={index} className="flex items-start justify-between p-2.5 bg-white border border-slate-200 rounded-lg text-xs gap-3 animate-in fade-in-50">
+                          <div className="flex-1 min-w-0">
+                            <div className="font-semibold text-slate-800 truncate">{item.description}</div>
+                            <div className="text-slate-500 mt-0.5 flex flex-wrap gap-2">
+                              <span>Qty: {item.quantity}</span>
+                              <span>•</span>
+                              <span>Price: {settings?.currencySymbol || 'GH₵'}{item.unitPrice}</span>
+                              {item.area && (
+                                <>
+                                  <span>•</span>
+                                  <span>Size: {item.width}ft x {item.height}ft ({item.area.toFixed(1)} sqft)</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="font-bold text-slate-900">{settings?.currencySymbol || 'GH₵'}{item.total.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="w-7 h-7 text-red-500 hover:text-red-700 hover:bg-red-50"
+                              onClick={() => handleRemoveDraftItem(index)}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Configure Job Section */}
+                <div className="border border-slate-200 rounded-xl p-4 bg-white space-y-4 shadow-sm">
+                  <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
+                    <div className="w-5 h-5 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 font-bold text-[10px]">
+                      +
+                    </div>
+                    <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">Configure a Job</span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
                     <div className="grid gap-2">
-                      <Label>Product / Material</Label>
-                      <Select onValueChange={(v) => setSelectedProduct(products.find(p => p.id === v) || null)}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select material" />
+                      <Label htmlFor="pricingMode">Pricing Mode</Label>
+                      <Select value={pricingMode} onValueChange={(v: any) => setPricingMode(v)}>
+                        <SelectTrigger id="pricingMode">
+                          <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {products.map(p => (
-                            <SelectItem key={p.id} value={p.id!}>{p.name} ({settings?.currencySymbol || 'GH₵'}{p.pricePerSqFt}/sqft)</SelectItem>
-                          ))}
+                          <SelectItem value="standard">Standard</SelectItem>
+                          <SelectItem value="area">Area-Based (Sq Ft)</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
-                  )}
-                </div>
-
-                <div className="grid gap-2">
-                  <Label htmlFor="description">Job Description</Label>
-                  <Input id="description" name="description" placeholder="e.g. 500 Business Cards" required />
-                </div>
-
-                {pricingMode === 'area' ? (
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="grid gap-2">
-                      <Label htmlFor="width">Width (ft)</Label>
-                      <Input id="width" type="number" step="0.1" value={width} onChange={(e) => setWidth(e.target.value)} required />
-                    </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="height">Height (ft)</Label>
-                      <Input id="height" type="number" step="0.1" value={height} onChange={(e) => setHeight(e.target.value)} required />
-                    </div>
-                    <div className="grid gap-2">
-                      <Label>Area (sq ft)</Label>
-                      <div className="h-10 flex items-center px-3 bg-slate-50 border border-slate-200 rounded-md text-sm font-medium">
-                        {(parseFloat(width) * parseFloat(height) || 0).toFixed(2)}
+                    {pricingMode === 'area' && (
+                      <div className="grid gap-2">
+                        <Label>Product / Material</Label>
+                        <Select value={selectedProduct?.id || ""} onValueChange={(v) => setSelectedProduct(products.find(p => p.id === v) || null)}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select material" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {products.map(p => (
+                              <SelectItem key={p.id} value={p.id!}>{p.name} ({settings?.currencySymbol || 'GH₵'}{p.pricePerSqFt}/sqft)</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </div>
-                    </div>
+                    )}
                   </div>
-                ) : null}
 
-                <div className="grid grid-cols-2 gap-4">
                   <div className="grid gap-2">
-                    <Label htmlFor="quantity">Quantity</Label>
-                    <Input id="quantity" type="number" min="1" value={quantity} onChange={(e) => setQuantity(e.target.value)} required />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="unitPrice">{pricingMode === 'area' ? `Price per Piece (${settings?.currencySymbol || 'GH₵'})` : `Unit Price (${settings?.currencySymbol || 'GH₵'})`}</Label>
+                    <Label htmlFor="description">Job Description</Label>
                     <Input 
-                      id="unitPrice" 
-                      type="number" 
-                      step="0.01" 
-                      min="0" 
-                      value={unitPrice} 
-                      onChange={(e) => setUnitPrice(e.target.value)} 
-                      required 
+                      id="description" 
+                      value={description} 
+                      onChange={(e) => setDescription(e.target.value)} 
+                      placeholder="e.g. 500 Business Cards" 
                     />
                   </div>
-                </div>
 
-                <div className="p-3 bg-blue-50 rounded-lg flex items-center justify-between">
-                  <span className="text-sm font-medium text-blue-700">Total Amount:</span>
-                  <span className="text-lg font-bold text-blue-900">{settings?.currencySymbol || 'GH₵'}{(Number(quantity) * Number(unitPrice)).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
-                </div>
+                  {pricingMode === 'area' ? (
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="grid gap-2">
+                        <Label htmlFor="width">Width (ft)</Label>
+                        <Input id="width" type="number" step="0.1" value={width} onChange={(e) => setWidth(e.target.value)} />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="height">Height (ft)</Label>
+                        <Input id="height" type="number" step="0.1" value={height} onChange={(e) => setHeight(e.target.value)} />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label>Area (sq ft)</Label>
+                        <div className="h-10 flex items-center px-3 bg-slate-50 border border-slate-200 rounded-md text-sm font-medium">
+                          {(parseFloat(width) * parseFloat(height) || 0).toFixed(2)}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
 
-                <div className="grid gap-2">
-                  <Label htmlFor="paidAmount">Paid Amount ({settings?.currencySymbol || 'GH₵'})</Label>
-                  <Input id="paidAmount" name="paidAmount" type="number" step="0.01" min="0" defaultValue="0" required />
-                </div>
-
-                <div className="grid gap-2 border-t border-slate-100 pt-4">
-                  <Label className="text-slate-700 font-medium">Order Date</Label>
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      variant={orderDateMode === 'current' ? 'default' : 'outline'}
-                      className={`flex-1 h-9 text-xs font-bold ${
-                        orderDateMode === 'current' 
-                          ? 'bg-blue-600 hover:bg-blue-700 text-white' 
-                          : 'border-slate-200 text-slate-700 hover:bg-slate-50'
-                      }`}
-                      onClick={() => setOrderDateMode('current')}
-                    >
-                      Current Date & Time
-                    </Button>
-                    <Button
-                      type="button"
-                      variant={orderDateMode === 'custom' ? 'default' : 'outline'}
-                      className={`flex-1 h-9 text-xs font-bold ${
-                        orderDateMode === 'custom' 
-                          ? 'bg-blue-600 hover:bg-blue-700 text-white' 
-                          : 'border-slate-200 text-slate-700 hover:bg-slate-50'
-                      }`}
-                      onClick={() => setOrderDateMode('custom')}
-                    >
-                      Backdate / Custom
-                    </Button>
-                  </div>
-                  {orderDateMode === 'custom' && (
-                    <div className="mt-2 animate-in fade-in-50 duration-200">
-                      <Input
-                        type="date"
-                        value={customOrderDate}
-                        onChange={(e) => setCustomOrderDate(e.target.value)}
-                        className="h-10 text-slate-900 bg-white"
-                        required
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="quantity">Quantity</Label>
+                      <Input id="quantity" type="number" min="1" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="unitPrice">{pricingMode === 'area' ? `Price per Piece (${settings?.currencySymbol || 'GH₵'})` : `Unit Price (${settings?.currencySymbol || 'GH₵'})`}</Label>
+                      <Input 
+                        id="unitPrice" 
+                        type="number" 
+                        step="0.01" 
+                        min="0" 
+                        value={unitPrice} 
+                        onChange={(e) => setUnitPrice(e.target.value)} 
                       />
                     </div>
-                  )}
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 pt-2 border-t border-slate-50">
+                    <div className="text-xs text-slate-500 font-semibold">
+                      Job Total: <span className="text-sm font-bold text-slate-800">{settings?.currencySymbol || 'GH₵'}{(Number(quantity) * Number(unitPrice)).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                    </div>
+                    <Button 
+                      type="button" 
+                      onClick={handleAddDraftItem}
+                      disabled={!description.trim() || Number(quantity) <= 0}
+                      className="bg-slate-800 hover:bg-slate-900 text-white font-bold h-9 text-xs px-4"
+                    >
+                      <Plus className="w-3.5 h-3.5 mr-1" /> Add Job to Order
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Final Order Metadata */}
+                <div className="p-4 bg-blue-50/50 border border-blue-100 rounded-xl space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-bold text-blue-800">Total Order Amount:</span>
+                    <span className="text-xl font-extrabold text-blue-900">
+                      {settings?.currencySymbol || 'GH₵'}
+                      {newOrderItems.reduce((sum, item) => sum + item.total, 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                    </span>
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label htmlFor="paidAmount">Paid Amount ({settings?.currencySymbol || 'GH₵'})</Label>
+                    <Input id="paidAmount" name="paidAmount" type="number" step="0.01" min="0" defaultValue="0" required />
+                  </div>
+
+                  <div className="grid gap-2 border-t border-blue-100/50 pt-3">
+                    <Label className="text-slate-700 font-medium">Order Date</Label>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant={orderDateMode === 'current' ? 'default' : 'outline'}
+                        className={`flex-1 h-9 text-xs font-bold ${
+                          orderDateMode === 'current' 
+                            ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                            : 'border-slate-200 text-slate-700 bg-white hover:bg-slate-50'
+                        }`}
+                        onClick={() => setOrderDateMode('current')}
+                      >
+                        Current Date & Time
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={orderDateMode === 'custom' ? 'default' : 'outline'}
+                        className={`flex-1 h-9 text-xs font-bold ${
+                          orderDateMode === 'custom' 
+                            ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                            : 'border-slate-200 text-slate-700 bg-white hover:bg-slate-50'
+                        }`}
+                        onClick={() => setOrderDateMode('custom')}
+                      >
+                        Backdate / Custom
+                      </Button>
+                    </div>
+                    {orderDateMode === 'custom' && (
+                      <div className="mt-2 animate-in fade-in-50 duration-200">
+                        <Input
+                          type="date"
+                          value={customOrderDate}
+                          onChange={(e) => setCustomOrderDate(e.target.value)}
+                          className="h-10 text-slate-900 bg-white"
+                          required
+                        />
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
               <DialogFooter>
-                <Button type="submit" disabled={isSubmitting} className="bg-blue-600 hover:bg-blue-700 w-full">
+                <Button type="submit" disabled={isSubmitting || newOrderItems.length === 0} className="bg-blue-600 hover:bg-blue-700 w-full font-bold">
                   {isSubmitting ? "Creating Order..." : "Create Order"}
                 </Button>
               </DialogFooter>
@@ -3712,11 +3843,11 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
 
       {/* Edit Order Dialog */}
       <Dialog open={editingOrder !== null} onOpenChange={(open) => { if (!open) { setEditingOrder(null); setEditError(null); } }}>
-        <DialogContent className="sm:max-w-lg bg-white">
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto bg-white">
           <form onSubmit={handleUpdateOrder}>
             <DialogHeader>
               <DialogTitle className="text-slate-900 font-bold text-lg">Edit Order {editingOrder?.invoiceNumber || `#${editingOrder?.id?.slice(-6).toUpperCase()}`}</DialogTitle>
-              <DialogDescription className="text-slate-500 text-sm">Update the details for this printing job.</DialogDescription>
+              <DialogDescription className="text-slate-500 text-sm">Update the details or configure multiple jobs for this order.</DialogDescription>
             </DialogHeader>
             {editError && (
               <div className="mx-6 mt-4 p-3 rounded-lg bg-red-50 border border-red-100 flex items-start gap-2 text-red-700 text-xs font-medium animate-in fade-in duration-200">
@@ -3739,188 +3870,261 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
                 </Select>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="grid gap-2">
-                  <Label>Pricing Mode</Label>
-                  <Select value={editPricingMode} onValueChange={(v: any) => setEditPricingMode(v)}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="standard">Standard</SelectItem>
-                      <SelectItem value="area">Area-Based (Sq Ft)</SelectItem>
-                    </SelectContent>
-                  </Select>
+              {/* Added Jobs List */}
+              <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50">
+                <div className="flex items-center justify-between mb-3">
+                  <Label className="text-xs font-bold text-slate-800 uppercase tracking-wider">Jobs in this Order ({editOrderItems.length})</Label>
+                  {editOrderItems.length > 0 && (
+                    <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-full">
+                      Subtotal: {settings?.currencySymbol || 'GH₵'}{editOrderItems.reduce((sum, item) => sum + item.total, 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                    </span>
+                  )}
                 </div>
-                {editPricingMode === 'area' && (
+                
+                {editOrderItems.length === 0 ? (
+                  <div className="text-center py-6 text-xs text-slate-500 bg-white border border-dashed border-slate-200 rounded-lg">
+                    No jobs in this order. Use the section below to add a job.
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {editOrderItems.map((item, index) => (
+                      <div key={index} className="flex items-start justify-between p-2.5 bg-white border border-slate-200 rounded-lg text-xs gap-3 animate-in fade-in-50">
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-slate-800 truncate">{item.description}</div>
+                          <div className="text-slate-500 mt-0.5 flex flex-wrap gap-2">
+                            <span>Qty: {item.quantity}</span>
+                            <span>•</span>
+                            <span>Price: {settings?.currencySymbol || 'GH₵'}{item.unitPrice}</span>
+                            {item.area && (
+                              <>
+                                  <span>•</span>
+                                  <span>Size: {item.width}ft x {item.height}ft ({item.area.toFixed(1)} sqft)</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="font-bold text-slate-900">{settings?.currencySymbol || 'GH₵'}{item.total.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="w-7 h-7 text-red-500 hover:text-red-700 hover:bg-red-50"
+                            onClick={() => handleRemoveEditDraftItem(index)}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Configure and Add Job */}
+              <div className="border border-slate-200 rounded-xl p-4 bg-white space-y-4 shadow-sm">
+                <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
+                  <div className="w-5 h-5 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 font-bold text-[10px]">
+                    +
+                  </div>
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">Configure & Add Job</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
                   <div className="grid gap-2">
-                    <Label>Product / Material</Label>
-                    <Select 
-                      value={editSelectedProduct?.id || ""} 
-                      onValueChange={(v) => setEditSelectedProduct(products.find(p => p.id === v) || null)}
-                    >
+                    <Label>Pricing Mode</Label>
+                    <Select value={editPricingMode} onValueChange={(v: any) => setEditPricingMode(v)}>
                       <SelectTrigger>
-                        <SelectValue placeholder="Select material" />
+                        <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {products.map(p => (
-                          <SelectItem key={p.id} value={p.id!}>{p.name} ({settings?.currencySymbol || 'GH₵'}{p.pricePerSqFt}/sqft)</SelectItem>
-                        ))}
+                        <SelectItem value="standard">Standard</SelectItem>
+                        <SelectItem value="area">Area-Based (Sq Ft)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-                )}
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="editDescription">Job Description</Label>
-                <Input 
-                  id="editDescription" 
-                  value={editDescription} 
-                  onChange={(e) => setEditDescription(e.target.value)} 
-                  placeholder="e.g. 500 Business Cards" 
-                  required 
-                />
-              </div>
-
-              {editPricingMode === 'area' ? (
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="grid gap-2">
-                    <Label htmlFor="editWidth">Width (ft)</Label>
-                    <Input 
-                      id="editWidth" 
-                      type="number" 
-                      step="0.1" 
-                      value={editWidth} 
-                      onChange={(e) => setEditWidth(e.target.value)} 
-                      required 
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="editHeight">Height (ft)</Label>
-                    <Input 
-                      id="editHeight" 
-                      type="number" 
-                      step="0.1" 
-                      value={editHeight} 
-                      onChange={(e) => setEditHeight(e.target.value)} 
-                      required 
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label>Area (sq ft)</Label>
-                    <div className="h-10 flex items-center px-3 bg-slate-50 border border-slate-200 rounded-md text-sm font-medium">
-                      {(parseFloat(editWidth) * parseFloat(editHeight) || 0).toFixed(2)}
+                  {editPricingMode === 'area' && (
+                    <div className="grid gap-2">
+                      <Label>Product / Material</Label>
+                      <Select 
+                        value={editSelectedProduct?.id || ""} 
+                        onValueChange={(v) => setEditSelectedProduct(products.find(p => p.id === v) || null)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select material" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {products.map(p => (
+                            <SelectItem key={p.id} value={p.id!}>{p.name} ({settings?.currencySymbol || 'GH₵'}{p.pricePerSqFt}/sqft)</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
-                  </div>
+                  )}
                 </div>
-              ) : null}
 
-              <div className="grid grid-cols-2 gap-4">
                 <div className="grid gap-2">
-                  <Label htmlFor="editQuantity">Quantity</Label>
+                  <Label htmlFor="editDescription">Job Description</Label>
                   <Input 
-                    id="editQuantity" 
-                    type="number" 
-                    min="1" 
-                    value={editQuantity} 
-                    onChange={(e) => setEditQuantity(e.target.value)} 
-                    required 
+                    id="editDescription" 
+                    value={editDescription} 
+                    onChange={(e) => setEditDescription(e.target.value)} 
+                    placeholder="e.g. 500 Business Cards" 
                   />
                 </div>
+
+                {editPricingMode === 'area' ? (
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="editWidth">Width (ft)</Label>
+                      <Input 
+                        id="editWidth" 
+                        type="number" 
+                        step="0.1" 
+                        value={editWidth} 
+                        onChange={(e) => setEditWidth(e.target.value)} 
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="editHeight">Height (ft)</Label>
+                      <Input 
+                        id="editHeight" 
+                        type="number" 
+                        step="0.1" 
+                        value={editHeight} 
+                        onChange={(e) => setEditHeight(e.target.value)} 
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>Area (sq ft)</Label>
+                      <div className="h-10 flex items-center px-3 bg-slate-50 border border-slate-200 rounded-md text-sm font-medium">
+                        {(parseFloat(editWidth) * parseFloat(editHeight) || 0).toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="editQuantity">Quantity</Label>
+                    <Input 
+                      id="editQuantity" 
+                      type="number" 
+                      min="1" 
+                      value={editQuantity} 
+                      onChange={(e) => setEditQuantity(e.target.value)} 
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="editUnitPrice">{editPricingMode === 'area' ? `Price per Piece (${settings?.currencySymbol || 'GH₵'})` : `Unit Price (${settings?.currencySymbol || 'GH₵'})`}</Label>
+                    <Input 
+                      id="editUnitPrice" 
+                      type="number" 
+                      step="0.01" 
+                      min="0" 
+                      value={editUnitPrice} 
+                      onChange={(e) => setEditUnitPrice(e.target.value)} 
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 pt-2 border-t border-slate-50">
+                  <div className="text-xs text-slate-500 font-semibold">
+                    Job Total: <span className="text-sm font-bold text-slate-800">{settings?.currencySymbol || 'GH₵'}{(Number(editQuantity) * Number(editUnitPrice)).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                  </div>
+                  <Button 
+                    type="button" 
+                    onClick={handleAddEditDraftItem}
+                    disabled={!editDescription.trim() || Number(editQuantity) <= 0}
+                    className="bg-slate-800 hover:bg-slate-900 text-white font-bold h-9 text-xs px-4"
+                  >
+                    <Plus className="w-3.5 h-3.5 mr-1" /> Add Job to Order
+                  </Button>
+                </div>
+              </div>
+
+              {/* Final Order Metadata */}
+              <div className="p-4 bg-blue-50/50 border border-blue-100 rounded-xl space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-bold text-blue-800">Total Order Amount:</span>
+                  <span className="text-xl font-extrabold text-blue-900">
+                    {settings?.currencySymbol || 'GH₵'}
+                    {editOrderItems.reduce((sum, item) => sum + item.total, 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                  </span>
+                </div>
+
                 <div className="grid gap-2">
-                  <Label htmlFor="editUnitPrice">{editPricingMode === 'area' ? `Price per Piece (${settings?.currencySymbol || 'GH₵'})` : `Unit Price (${settings?.currencySymbol || 'GH₵'})`}</Label>
+                  <Label htmlFor="editPaidAmount">Paid Amount ({settings?.currencySymbol || 'GH₵'})</Label>
                   <Input 
-                    id="editUnitPrice" 
+                    id="editPaidAmount" 
                     type="number" 
                     step="0.01" 
                     min="0" 
-                    value={editUnitPrice} 
-                    onChange={(e) => setEditUnitPrice(e.target.value)} 
+                    value={editPaidAmount} 
+                    onChange={(e) => setEditPaidAmount(e.target.value)} 
                     required 
                   />
                 </div>
-              </div>
 
-              <div className="p-3 bg-blue-50 rounded-lg flex items-center justify-between">
-                <span className="text-sm font-medium text-blue-700">Total Amount:</span>
-                <span className="text-lg font-bold text-blue-900">
-                  {settings?.currencySymbol || 'GH₵'}
-                  {(Number(editQuantity) * Number(editUnitPrice)).toLocaleString(undefined, {minimumFractionDigits: 2})}
-                </span>
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="editPaidAmount">Paid Amount ({settings?.currencySymbol || 'GH₵'})</Label>
-                <Input 
-                  id="editPaidAmount" 
-                  type="number" 
-                  step="0.01" 
-                  min="0" 
-                  value={editPaidAmount} 
-                  onChange={(e) => setEditPaidAmount(e.target.value)} 
-                  required 
-                />
-              </div>
-
-              <div className="grid gap-2 border-t border-slate-100 pt-4">
-                <Label className="text-slate-700 font-medium">Order Date</Label>
-                <div className="flex gap-2">
-                  <Button
-                    type="button"
-                    variant={editOrderDateMode === 'original' ? 'default' : 'outline'}
-                    className={`flex-1 h-9 text-xs font-bold ${
-                      editOrderDateMode === 'original' 
-                        ? 'bg-blue-600 hover:bg-blue-700 text-white' 
-                        : 'border-slate-200 text-slate-700 hover:bg-slate-50'
-                    }`}
-                    onClick={() => setEditOrderDateMode('original')}
-                  >
-                    Keep Original
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={editOrderDateMode === 'current' ? 'default' : 'outline'}
-                    className={`flex-1 h-9 text-xs font-bold ${
-                      editOrderDateMode === 'current' 
-                        ? 'bg-blue-600 hover:bg-blue-700 text-white' 
-                        : 'border-slate-200 text-slate-700 hover:bg-slate-50'
-                    }`}
-                    onClick={() => setEditOrderDateMode('current')}
-                  >
-                    Current Date/Time
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={editOrderDateMode === 'custom' ? 'default' : 'outline'}
-                    className={`flex-1 h-9 text-xs font-bold ${
-                      editOrderDateMode === 'custom' 
-                        ? 'bg-blue-600 hover:bg-blue-700 text-white' 
-                        : 'border-slate-200 text-slate-700 hover:bg-slate-50'
-                    }`}
-                    onClick={() => setEditOrderDateMode('custom')}
-                  >
-                    Set Custom Date
-                  </Button>
-                </div>
-                {editOrderDateMode === 'custom' && (
-                  <div className="mt-2 animate-in fade-in-50 duration-200">
-                    <Input
-                      type="date"
-                      value={editCustomOrderDate}
-                      onChange={(e) => setEditCustomOrderDate(e.target.value)}
-                      className="h-10 text-slate-900 bg-white"
-                      required
-                    />
+                <div className="grid gap-2 border-t border-blue-100/50 pt-3">
+                  <Label className="text-slate-700 font-medium">Order Date</Label>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant={editOrderDateMode === 'original' ? 'default' : 'outline'}
+                      className={`flex-1 h-9 text-xs font-bold ${
+                        editOrderDateMode === 'original' 
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                          : 'border-slate-200 text-slate-700 bg-white hover:bg-slate-50'
+                      }`}
+                      onClick={() => setEditOrderDateMode('original')}
+                    >
+                      Keep Original
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={editOrderDateMode === 'current' ? 'default' : 'outline'}
+                      className={`flex-1 h-9 text-xs font-bold ${
+                        editOrderDateMode === 'current' 
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                          : 'border-slate-200 text-slate-700 bg-white hover:bg-slate-50'
+                      }`}
+                      onClick={() => setEditOrderDateMode('current')}
+                    >
+                      Current Date/Time
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={editOrderDateMode === 'custom' ? 'default' : 'outline'}
+                      className={`flex-1 h-9 text-xs font-bold ${
+                        editOrderDateMode === 'custom' 
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                          : 'border-slate-200 text-slate-700 bg-white hover:bg-slate-50'
+                      }`}
+                      onClick={() => setEditOrderDateMode('custom')}
+                    >
+                      Set Custom Date
+                    </Button>
                   </div>
-                )}
+                  {editOrderDateMode === 'custom' && (
+                    <div className="mt-2 animate-in fade-in-50 duration-200">
+                      <Input
+                        type="date"
+                        value={editCustomOrderDate}
+                        onChange={(e) => setEditCustomOrderDate(e.target.value)}
+                        className="h-10 text-slate-900 bg-white"
+                        required
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
             <DialogFooter className="border-t border-slate-100 pt-4 mt-2">
               <Button type="button" variant="outline" onClick={() => setEditingOrder(null)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={isSubmitting} className="bg-blue-600 hover:bg-blue-700 text-white font-bold">
+              <Button type="submit" disabled={isSubmitting || editOrderItems.length === 0} className="bg-blue-600 hover:bg-blue-700 text-white font-bold">
                 {isSubmitting ? "Updating..." : "Update Order"}
               </Button>
             </DialogFooter>
