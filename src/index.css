@@ -128,3 +128,53 @@
     @apply font-sans;
     }
 }
+
+/* Printable A4 Paper Layout Styles */
+@page {
+  size: A4 portrait;
+  margin: 10mm;
+}
+
+@media print {
+  html, body {
+    width: 210mm !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .print\:hidden,
+  .hide-on-pdf {
+    display: none !important;
+  }
+
+  /* Ensure card containers and table rows don't get split awkwardly across page breaks */
+  .card,
+  .print-avoid-break,
+  tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  /* Repeat table headers at top of page in multi-page printouts */
+  thead {
+    display: table-header-group !important;
+  }
+
+  .break-after-page {
+    break-after: page !important;
+    page-break-after: always !important;
+  }
+
+  table {
+    width: 100% !important;
+    table-layout: auto !important;
+  }
+
+  th, td {
+    padding: 4px 6px !important;
+  }
+}

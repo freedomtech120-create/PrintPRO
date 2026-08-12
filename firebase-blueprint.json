@@ -74,7 +74,8 @@
         "amount": { "type": "number" },
         "category": { "type": "string" },
         "date": { "type": "string", "format": "date-time" },
-        "createdBy": { "type": "string" }
+        "createdBy": { "type": "string" },
+        "items": { "type": "array" }
       },
       "required": ["tenantId", "description", "amount", "category", "date", "createdBy"]
     },

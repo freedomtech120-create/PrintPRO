@@ -73,9 +73,10 @@ service cloud.firestore {
 
     function isValidExpense(data) {
       return data.tenantId is string && data.tenantId.size() <= 128
-        && data.description is string && data.description.size() <= 200
+        && data.description is string && data.description.size() <= 500
         && data.amount is number
-        && data.category is string && data.category.size() <= 50;
+        && data.category is string && data.category.size() <= 50
+        && (!('items' in data) || data.items == null || (data.items is list && data.items.size() <= 50));
     }
 
     function isValidSettings(data) {
@@ -154,8 +155,13 @@ service cloud.firestore {
       allow list: if isSignedIn() && (isOwner(resource.data.tenantId) || isAdmin());
       allow create: if isEmailVerified() && isOwner(incoming().tenantId) && isValidExpense(incoming())
         && isValidId(expenseId)
-        && incoming().date == request.time;
-      allow update: if isAdmin();
+        && (incoming().date is timestamp || incoming().date == request.time);
+      allow update: if isEmailVerified() && (isOwner(existing().tenantId) || isAdmin()) && isValidExpense(incoming())
+        && incoming().tenantId == existing().tenantId
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['description', 'amount', 'category', 'date', 'items'])
+          || isAdmin()
+        );
       allow delete: if isEmailVerified() && (isOwner(existing().tenantId) || isAdmin());
     }
 

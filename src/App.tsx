@@ -201,22 +201,54 @@ const generatePDFHelper = async (
       format: 'a4',
     });
 
-    const imgWidth = 210; // A4 standard width
-    const pageHeight = 295; // A4 standard height
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-    let heightLeft = imgHeight;
-    let position = 0;
+    // Standard A4 dimensions (210mm x 297mm) with 10mm side and 8mm top/bottom margins
+    const marginX = 10;
+    const marginY = 8;
+    const printableWidth = 190;
+    const printableHeight = 281;
 
-    // Drawing first page
-    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
-    heightLeft -= pageHeight;
+    const totalImgHeightMm = (canvas.height * printableWidth) / canvas.width;
 
-    // Handle multi-page PDFs
-    while (heightLeft >= 0) {
-      position = heightLeft - imgHeight;
-      pdf.addPage();
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
-      heightLeft -= pageHeight;
+    if (totalImgHeightMm <= printableHeight) {
+      // Fits on a single A4 page cleanly
+      pdf.addImage(imgData, 'PNG', marginX, marginY, printableWidth, totalImgHeightMm, undefined, 'FAST');
+    } else {
+      // Multi-page A4 canvas slicing to preserve page margins
+      const pageCanvasHeight = Math.floor((canvas.width * printableHeight) / printableWidth);
+      let renderedHeight = 0;
+      let pageCount = 0;
+
+      while (renderedHeight < canvas.height) {
+        if (pageCount > 0) {
+          pdf.addPage();
+        }
+
+        const sourceY = renderedHeight;
+        const sourceHeight = Math.min(pageCanvasHeight, canvas.height - renderedHeight);
+
+        const pageCanvas = document.createElement('canvas');
+        pageCanvas.width = canvas.width;
+        pageCanvas.height = sourceHeight;
+
+        const ctx = pageCanvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+          ctx.drawImage(
+            canvas,
+            0, sourceY, canvas.width, sourceHeight,
+            0, 0, canvas.width, sourceHeight
+          );
+        }
+
+        const pageImgData = pageCanvas.toDataURL('image/png');
+        const pageSliceHeightMm = (sourceHeight * printableWidth) / canvas.width;
+
+        pdf.addImage(pageImgData, 'PNG', marginX, marginY, printableWidth, pageSliceHeightMm, undefined, 'FAST');
+
+        renderedHeight += sourceHeight;
+        pageCount++;
+      }
     }
 
     if (download) {
@@ -2916,6 +2948,19 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
 
   const handlePrint = useReactToPrint({
     contentRef: receiptRef,
+    documentTitle: selectedOrder ? `Invoice_${selectedOrder.invoiceNumber || selectedOrder.id}` : 'Invoice',
+    pageStyle: `
+      @page {
+        size: A4 portrait;
+        margin: 10mm;
+      }
+      @media print {
+        body {
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+      }
+    `,
   });
 
   const handleAddOrder = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -3773,7 +3818,7 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
       {/* Receipt/Invoice Dialog */}
       <Dialog open={isReceiptOpen} onOpenChange={setIsReceiptOpen}>
         <DialogContent className="sm:max-w-2xl p-0 overflow-hidden bg-white">
-          <div className="p-8 max-h-[80vh] overflow-y-auto" ref={receiptRef}>
+          <div className="p-8 max-h-[80vh] overflow-y-auto print:max-h-none print:overflow-visible print:p-0 print:m-0 print:max-w-[190mm] print:w-full print:mx-auto printable-a4" ref={receiptRef}>
             {selectedOrder && (
               <div className="space-y-8">
                 <div className="flex justify-between items-start">
@@ -5725,10 +5770,6 @@ function MonthlyReportView({
   
   const reportRef = useRef<HTMLDivElement>(null);
 
-  const handlePrint = useReactToPrint({
-    contentRef: reportRef,
-  });
-
   const MONTHS = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December"
@@ -5737,6 +5778,23 @@ function MonthlyReportView({
   const periodTitle = reportMode === 'monthly'
     ? `${MONTHS[selectedMonth]} ${selectedYear}`
     : `${format(new Date(customStartDate), 'PP')} - ${format(new Date(customEndDate), 'PP')}`;
+
+  const handlePrint = useReactToPrint({
+    contentRef: reportRef,
+    documentTitle: `Financial_Report_${periodTitle.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
+    pageStyle: `
+      @page {
+        size: A4 portrait;
+        margin: 10mm;
+      }
+      @media print {
+        body {
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+      }
+    `,
+  });
 
   const generateReportSummaryText = () => {
     let msg = `Accounts Statement for ${periodTitle}\n`;
@@ -6278,7 +6336,7 @@ function MonthlyReportView({
         /* Printable Report Sheet */
         <div 
           ref={reportRef} 
-          className="print:bg-white print:text-black print:p-8 space-y-6"
+          className="print:bg-white print:text-black print:p-0 print:m-0 print:max-w-[190mm] print:w-full print:mx-auto space-y-6 printable-a4"
         >
           {/* Printable Business Header Brand */}
           <div className="hidden print:flex items-start justify-between border-b-2 border-slate-200 pb-6 mb-4">
@@ -6301,7 +6359,7 @@ function MonthlyReportView({
           </div>
 
           {/* KPI Analytics Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 print:grid-cols-3 gap-4 print:gap-3 print:break-inside-avoid">
             <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
               <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Gross Invoiced</span>
@@ -6387,7 +6445,7 @@ function MonthlyReportView({
 
           {/* Performance Daily Chart & Costs Breakdown */}
           {reportFilter === 'all' && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 print:grid-cols-3 print:gap-4 print:break-inside-avoid">
               <Card className="lg:col-span-2 shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider">Transaction Activity Graph</CardTitle>
