@@ -319,6 +319,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 /// Types
 import { Order, Expense, ExpenseItem, Customer, Product, BusinessSettings, OrderStatus, PaymentStatus, OrderItem, Tenant, PlatformSettings } from './types';
 
+export function getEffectivePaidAmount(o?: Order | null): number {
+  if (!o) return 0;
+  if (o.paymentStatus === 'paid') {
+    return o.totalAmount || 0;
+  }
+  if (o.paymentStatus === 'unpaid') {
+    return 0;
+  }
+  return typeof o.paidAmount === 'number' ? o.paidAmount : 0;
+}
+
 const ADMIN_EMAIL = 'freedomtech120@gmail.com';
 const PAYSTACK_PUBLIC_KEY = (import.meta as any).env.VITE_PAYSTACK_PUBLIC_KEY || '';
 
@@ -3092,7 +3103,19 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
 
   const updatePaymentStatus = async (orderId: string, paymentStatus: PaymentStatus) => {
     try {
-      await updateDoc(doc(db, 'orders', orderId), { paymentStatus, updatedAt: serverTimestamp() });
+      const targetOrder = orders.find(o => o.id === orderId);
+      const total = targetOrder?.totalAmount || 0;
+      let newPaidAmount = targetOrder?.paidAmount || 0;
+      if (paymentStatus === 'paid') {
+        newPaidAmount = total;
+      } else if (paymentStatus === 'unpaid') {
+        newPaidAmount = 0;
+      }
+      await updateDoc(doc(db, 'orders', orderId), { 
+        paymentStatus, 
+        paidAmount: newPaidAmount,
+        updatedAt: serverTimestamp() 
+      });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `orders/${orderId}`);
     }
@@ -3895,11 +3918,11 @@ function OrdersView({ orders, customers, products, settings, user }: { orders: O
                     </div>
                     <div className="flex justify-between text-slate-500">
                       <span>Paid</span>
-                      <span>-{settings?.currencySymbol || 'GH₵'}{selectedOrder.paidAmount.toLocaleString()}</span>
+                      <span>-{settings?.currencySymbol || 'GH₵'}{getEffectivePaidAmount(selectedOrder).toLocaleString()}</span>
                     </div>
                     <div className="flex justify-between text-xl font-bold text-slate-900 pt-2 border-t border-slate-200">
                       <span>Balance</span>
-                      <span>{settings?.currencySymbol || 'GH₵'}{(selectedOrder.totalAmount - selectedOrder.paidAmount).toLocaleString()}</span>
+                      <span>{settings?.currencySymbol || 'GH₵'}{(selectedOrder.totalAmount - getEffectivePaidAmount(selectedOrder)).toLocaleString()}</span>
                     </div>
                   </div>
                 </div>
@@ -5910,8 +5933,8 @@ function MonthlyReportView({
 
   // Computations
   const totalInvoiced = activeOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
-  const totalCollected = activeOrders.reduce((sum, o) => sum + (o.paidAmount || 0), 0);
-  const totalOutstanding = activeOrders.reduce((sum, o) => sum + ((o.totalAmount || 0) - (o.paidAmount || 0)), 0);
+  const totalCollected = activeOrders.reduce((sum, o) => sum + getEffectivePaidAmount(o), 0);
+  const totalOutstanding = activeOrders.reduce((sum, o) => sum + ((o.totalAmount || 0) - getEffectivePaidAmount(o)), 0);
   const totalExpenses = monthlyExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
 
   // Profit/Loss
@@ -5944,7 +5967,7 @@ function MonthlyReportView({
       paymentStatus: o.paymentStatus,
       incomeAmount: o.totalAmount || 0,
       expenseAmount: 0,
-      cashReceived: o.paidAmount || 0,
+      cashReceived: getEffectivePaidAmount(o),
     })),
     ...monthlyExpenses.map(e => ({
       id: e.id,
@@ -5978,7 +6001,7 @@ function MonthlyReportView({
         return {
           label: day.toString(),
           Invoiced: dayOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0),
-          Collected: dayOrders.reduce((sum, o) => sum + (o.paidAmount || 0), 0),
+          Collected: dayOrders.reduce((sum, o) => sum + getEffectivePaidAmount(o), 0),
           Expenses: dayExpenses.reduce((sum, e) => sum + (e.amount || 0), 0),
         };
       });
@@ -5999,7 +6022,7 @@ function MonthlyReportView({
           data.push({
             label: format(currentDate, 'MMM d'),
             Invoiced: dayOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0),
-            Collected: dayOrders.reduce((sum, o) => sum + (o.paidAmount || 0), 0),
+            Collected: dayOrders.reduce((sum, o) => sum + getEffectivePaidAmount(o), 0),
             Expenses: dayExpenses.reduce((sum, e) => sum + (e.amount || 0), 0),
           });
         }
@@ -6014,7 +6037,7 @@ function MonthlyReportView({
             dataMap[monthStr] = { label: monthStr, Invoiced: 0, Collected: 0, Expenses: 0 };
           }
           dataMap[monthStr].Invoiced += (o.totalAmount || 0);
-          dataMap[monthStr].Collected += (o.paidAmount || 0);
+          dataMap[monthStr].Collected += getEffectivePaidAmount(o);
         });
 
         monthlyExpenses.forEach(e => {
@@ -6894,7 +6917,7 @@ function MonthlyReportView({
                             {currencySymbol}{o.totalAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}
                           </TableCell>
                           <TableCell className="text-right text-xs font-bold text-emerald-600">
-                            {currencySymbol}{o.paidAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                            {currencySymbol}{getEffectivePaidAmount(o).toLocaleString(undefined, {minimumFractionDigits: 2})}
                           </TableCell>
                         </TableRow>
                       ))
