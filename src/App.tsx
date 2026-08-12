@@ -6452,11 +6452,11 @@ function MonthlyReportView({
             </div>
           </div>
 
-          {/* KPI Analytics Cards */}
+          {/* KPI Analytics Cards in Plain English */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 print:grid-cols-3 gap-4 print:gap-3 print:break-inside-avoid">
             <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
               <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
-                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Gross Invoiced</span>
+                <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Total Billed Sales</span>
                 <TrendingUp className="w-4 h-4 text-blue-500" />
               </CardHeader>
               <CardContent className="py-2 px-4">
@@ -6467,29 +6467,29 @@ function MonthlyReportView({
 
             <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300 bg-emerald-50/30">
               <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
-                <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Realized Cash</span>
+                <span className="text-xs font-bold text-emerald-700 uppercase tracking-wider">Cash Paid by Customers</span>
                 <DollarSign className="w-4 h-4 text-emerald-500" />
               </CardHeader>
               <CardContent className="py-2 px-4">
                 <div className="text-xl font-black text-emerald-600">{currencySymbol}{totalCollected.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
-                <p className="text-[10.5px] text-emerald-600 mt-1 font-semibold">Payments received</p>
+                <p className="text-[10.5px] text-emerald-600 mt-1 font-semibold">Actual money collected</p>
               </CardContent>
             </Card>
 
             <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
               <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
-                <span className="text-xs font-bold text-amber-600 uppercase tracking-wider">Receivables</span>
+                <span className="text-xs font-bold text-amber-700 uppercase tracking-wider">Customer Debt Owed</span>
                 <Receipt className="w-4 h-4 text-amber-500" />
               </CardHeader>
               <CardContent className="py-2 px-4">
                 <div className="text-xl font-black text-amber-600">{currencySymbol}{totalOutstanding.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
-                <p className="text-[10.5px] text-amber-600 mt-1 font-semibold">Outstanding balance</p>
+                <p className="text-[10.5px] text-amber-600 mt-1 font-semibold">Unpaid customer balance</p>
               </CardContent>
             </Card>
 
             <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300 bg-rose-50/30">
               <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
-                <span className="text-xs font-bold text-rose-600 uppercase tracking-wider">Expenditures</span>
+                <span className="text-xs font-bold text-rose-700 uppercase tracking-wider">Shop Expenses Paid</span>
                 <TrendingDown className="w-4 h-4 text-rose-500" />
               </CardHeader>
               <CardContent className="py-2 px-4">
@@ -6500,7 +6500,7 @@ function MonthlyReportView({
 
             <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
               <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
-                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Accrued Margin</span>
+                <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Paper Profit</span>
                 <BarChart3 className="w-4 h-4 text-slate-400" />
               </CardHeader>
               <CardContent className="py-2 px-4">
@@ -6510,7 +6510,7 @@ function MonthlyReportView({
                 )}>
                   {accrualNetProfit < 0 ? '-' : ''}{currencySymbol}{Math.abs(accrualNetProfit).toLocaleString(undefined, {minimumFractionDigits: 2})}
                 </div>
-                <p className="text-[10.5px] text-slate-500 mt-1 font-semibold">Billing - Cost</p>
+                <p className="text-[10.5px] text-slate-500 mt-1 font-semibold">Billed Sales − Expenses</p>
               </CardContent>
             </Card>
 
@@ -6525,7 +6525,7 @@ function MonthlyReportView({
                   Money at Hand
                 </span>
                 <span className="bg-emerald-700 text-white text-[9px] font-black px-1.5 py-0.5 rounded uppercase">
-                  Cash Profit
+                  Actual Cash Profit
                 </span>
               </CardHeader>
               <CardContent className="py-2 px-4">
@@ -6535,7 +6535,7 @@ function MonthlyReportView({
                 )}>
                   {cashNetProfit < 0 ? '-' : ''}{currencySymbol}{Math.abs(cashNetProfit).toLocaleString(undefined, {minimumFractionDigits: 2})}
                 </div>
-                <p className="text-[10.5px] text-emerald-800 font-bold mt-1">Realized Net Cash</p>
+                <p className="text-[10.5px] text-emerald-800 font-bold mt-1">Cash Received − Expenses</p>
               </CardContent>
             </Card>
           </div>
