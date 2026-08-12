@@ -54,7 +54,13 @@ import {
   Calendar,
   Cloud,
   FileSpreadsheet,
-  RefreshCw
+  RefreshCw,
+  Wallet,
+  PieChart,
+  Scale,
+  ArrowUpRight,
+  ArrowDownRight,
+  PiggyBank
 } from 'lucide-react';
 import { 
   auth, 
@@ -6358,49 +6364,137 @@ function MonthlyReportView({
             <p className="text-xs text-slate-500">Summary of all printing jobs, customer billings, and operational expenses.</p>
           </div>
 
+          {/* Executive Money at Hand (Net Cash Profit) Feature Highlight Banner */}
+          <div className={cn(
+            "p-5 sm:p-6 rounded-2xl border-2 shadow-sm transition-all print:break-inside-avoid",
+            cashNetProfit >= 0 
+              ? "bg-emerald-50/80 border-emerald-500/50 print:bg-emerald-50 print:border-emerald-600" 
+              : "bg-rose-50/80 border-rose-500/50 print:bg-rose-50 print:border-rose-600"
+          )}>
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="space-y-1.5 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={cn(
+                    "inline-flex items-center px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider shadow-xs",
+                    cashNetProfit >= 0 ? "bg-emerald-600 text-white print:bg-emerald-700" : "bg-rose-600 text-white print:bg-rose-700"
+                  )}>
+                    <Wallet className="w-4 h-4 mr-1.5" />
+                    MONEY AT HAND (NET CASH PROFIT)
+                  </span>
+                  <span className="inline-flex items-center text-[11px] font-extrabold text-slate-700 bg-white/90 print:bg-white px-2.5 py-0.5 rounded-md border border-slate-200 shadow-2xs">
+                    <Coins className="w-3.5 h-3.5 mr-1 text-emerald-600" />
+                    LIQUID CASH BALANCE
+                  </span>
+                </div>
+                <p className="text-xs text-slate-700 print:text-slate-900 font-medium max-w-xl leading-relaxed">
+                  Actual liquid money available in hand after subtracting total shop operating expenditures (<strong className="text-rose-700">{currencySymbol}{totalExpenses.toLocaleString(undefined, {minimumFractionDigits: 2})}</strong>) from total realized cash payments received (<strong className="text-emerald-700">{currencySymbol}{totalCollected.toLocaleString(undefined, {minimumFractionDigits: 2})}</strong>).
+                </p>
+              </div>
+
+              <div className="bg-white print:bg-white p-4 rounded-xl border-2 border-slate-200 print:border-slate-400 shadow-sm min-w-[260px] text-left md:text-right">
+                <div className="text-[10.5px] font-black text-slate-500 uppercase tracking-widest">
+                  NET PROFIT / CASH AT HAND
+                </div>
+                <div className={cn(
+                  "text-3xl sm:text-4xl font-black tracking-tight mt-1",
+                  cashNetProfit >= 0 ? "text-emerald-700 print:text-emerald-800" : "text-rose-700 print:text-rose-800"
+                )}>
+                  {cashNetProfit < 0 ? '-' : ''}{currencySymbol}{Math.abs(cashNetProfit).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                </div>
+                <div className="text-[10px] font-bold text-slate-600 mt-1.5 flex items-center md:justify-end gap-1.5 pt-1 border-t border-slate-100">
+                  <span className="text-emerald-700 font-black">In: {currencySymbol}{totalCollected.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                  <span>−</span>
+                  <span className="text-rose-700 font-black">Out: {currencySymbol}{totalExpenses.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Visual Cashflow Progress & Liquidity Gauge Bar */}
+            <div className="mt-4 pt-3.5 border-t border-slate-200/90 print:border-slate-300">
+              <div className="flex items-center justify-between text-xs font-bold mb-1.5 text-slate-800">
+                <span className="uppercase tracking-wider text-[10px] text-slate-500 font-black flex items-center gap-1">
+                  <BarChart3 className="w-3.5 h-3.5 text-blue-600" /> Cash Retention Breakdown Graphic
+                </span>
+                <span className="font-black text-slate-900">
+                  {totalCollected > 0 
+                    ? `${Math.max(0, ((cashNetProfit / totalCollected) * 100)).toFixed(1)}% Retention Rate` 
+                    : '0% Retention'}
+                </span>
+              </div>
+              
+              <div className="w-full h-3.5 bg-slate-200/80 print:bg-slate-200 rounded-full overflow-hidden flex border border-slate-300/60 shadow-inner">
+                {totalCollected > 0 ? (
+                  <>
+                    <div 
+                      className="h-full bg-rose-500 print:bg-rose-600 transition-all" 
+                      style={{ width: `${Math.min(100, Math.max(0, (totalExpenses / totalCollected) * 100))}%` }}
+                    />
+                    <div 
+                      className="h-full bg-emerald-500 print:bg-emerald-600 transition-all" 
+                      style={{ width: `${Math.min(100, Math.max(0, (cashNetProfit / totalCollected) * 100))}%` }}
+                    />
+                  </>
+                ) : (
+                  <div className="w-full h-full bg-slate-300" />
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between text-[11px] font-bold text-slate-700 mt-2 gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full bg-rose-500 print:bg-rose-600 inline-block border border-rose-600" />
+                  <span>Expenses Paid: <strong className="text-slate-900">{currencySymbol}{totalExpenses.toLocaleString(undefined, {minimumFractionDigits: 2})}</strong> ({totalCollected > 0 ? ((totalExpenses / totalCollected) * 100).toFixed(0) : 0}%)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full bg-emerald-500 print:bg-emerald-600 inline-block border border-emerald-600" />
+                  <span className="text-emerald-800 font-extrabold">Money at Hand (Net Profit): <strong className="text-emerald-800 text-xs">{currencySymbol}{cashNetProfit.toLocaleString(undefined, {minimumFractionDigits: 2})}</strong> ({totalCollected > 0 ? ((cashNetProfit / totalCollected) * 100).toFixed(0) : 0}%)</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* KPI Analytics Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 print:grid-cols-3 gap-4 print:gap-3 print:break-inside-avoid">
             <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
               <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Gross Invoiced</span>
-                <TrendingUp className="w-4 h-4 text-slate-400" />
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Gross Invoiced</span>
+                <TrendingUp className="w-4 h-4 text-blue-500" />
               </CardHeader>
               <CardContent className="py-2 px-4">
                 <div className="text-xl font-black text-slate-900">{currencySymbol}{totalInvoiced.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
-                <p className="text-[10.5px] text-slate-400 mt-1 font-semibold">{activeOrders.length} print jobs booked</p>
+                <p className="text-[10.5px] text-slate-500 mt-1 font-semibold">{activeOrders.length} print jobs booked</p>
               </CardContent>
             </Card>
 
-            <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
+            <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300 bg-emerald-50/30">
               <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
-                <span className="text-xs font-bold text-emerald-500 uppercase tracking-wider">Realized Cash</span>
-                <DollarSign className="w-4 h-4 text-emerald-400" />
+                <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Realized Cash</span>
+                <DollarSign className="w-4 h-4 text-emerald-500" />
               </CardHeader>
               <CardContent className="py-2 px-4">
                 <div className="text-xl font-black text-emerald-600">{currencySymbol}{totalCollected.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
-                <p className="text-[10.5px] text-emerald-500/80 mt-1 font-semibold">Payments received</p>
+                <p className="text-[10.5px] text-emerald-600 mt-1 font-semibold">Payments received</p>
               </CardContent>
             </Card>
 
             <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
               <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
-                <span className="text-xs font-bold text-amber-500 uppercase tracking-wider">Receivables</span>
-                <Receipt className="w-4 h-4 text-amber-400" />
+                <span className="text-xs font-bold text-amber-600 uppercase tracking-wider">Receivables</span>
+                <Receipt className="w-4 h-4 text-amber-500" />
               </CardHeader>
               <CardContent className="py-2 px-4">
                 <div className="text-xl font-black text-amber-600">{currencySymbol}{totalOutstanding.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
-                <p className="text-[10.5px] text-amber-500/80 mt-1 font-semibold">Outstanding balance</p>
+                <p className="text-[10.5px] text-amber-600 mt-1 font-semibold">Outstanding balance</p>
               </CardContent>
             </Card>
 
-            <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
+            <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300 bg-rose-50/30">
               <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
-                <span className="text-xs font-bold text-rose-500 uppercase tracking-wider">Expenditures</span>
-                <TrendingDown className="w-4 h-4 text-rose-400" />
+                <span className="text-xs font-bold text-rose-600 uppercase tracking-wider">Expenditures</span>
+                <TrendingDown className="w-4 h-4 text-rose-500" />
               </CardHeader>
               <CardContent className="py-2 px-4">
                 <div className="text-xl font-black text-rose-600">{currencySymbol}{totalExpenses.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
-                <p className="text-[10.5px] text-rose-500/80 mt-1 font-semibold">{monthlyExpenses.length} receipts recorded</p>
+                <p className="text-[10.5px] text-rose-600 mt-1 font-semibold">{monthlyExpenses.length} receipts recorded</p>
               </CardContent>
             </Card>
 
@@ -6416,29 +6510,32 @@ function MonthlyReportView({
                 )}>
                   {accrualNetProfit < 0 ? '-' : ''}{currencySymbol}{Math.abs(accrualNetProfit).toLocaleString(undefined, {minimumFractionDigits: 2})}
                 </div>
-                <p className="text-[10.5px] text-slate-400 mt-1 font-semibold font-bold">Billing - Cost</p>
+                <p className="text-[10.5px] text-slate-500 mt-1 font-semibold">Billing - Cost</p>
               </CardContent>
             </Card>
 
+            {/* Highlighting Money at Hand Card in Grid */}
             <Card className={cn(
-              "shadow-sm border-slate-200 print:shadow-none print:border-slate-300",
-              cashNetProfit >= 0 ? "bg-emerald-50/20 border-emerald-100" : "bg-rose-50/20 border-rose-100"
+              "shadow-sm border-2 print:border-2 print:shadow-none",
+              cashNetProfit >= 0 ? "bg-emerald-100/60 border-emerald-500 print:bg-emerald-100 print:border-emerald-600" : "bg-rose-100/60 border-rose-500 print:bg-rose-100 print:border-rose-600"
             )}>
               <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
-                <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Net Cash Profit</span>
-                <div className={cn(
-                  "w-2 h-2 rounded-full",
-                  cashNetProfit >= 0 ? "bg-emerald-500 animate-pulse" : "bg-rose-500"
-                )} />
+                <span className="text-xs font-extrabold text-emerald-800 uppercase tracking-wider flex items-center gap-1">
+                  <Wallet className="w-3.5 h-3.5 text-emerald-700" />
+                  Money at Hand
+                </span>
+                <span className="bg-emerald-700 text-white text-[9px] font-black px-1.5 py-0.5 rounded uppercase">
+                  Cash Profit
+                </span>
               </CardHeader>
               <CardContent className="py-2 px-4">
                 <div className={cn(
                   "text-xl font-black",
-                  cashNetProfit >= 0 ? "text-emerald-700" : "text-rose-700"
+                  cashNetProfit >= 0 ? "text-emerald-800 print:text-emerald-900" : "text-rose-800 print:text-rose-900"
                 )}>
                   {cashNetProfit < 0 ? '-' : ''}{currencySymbol}{Math.abs(cashNetProfit).toLocaleString(undefined, {minimumFractionDigits: 2})}
                 </div>
-                <p className="text-[10.5px] text-slate-500 mt-1 font-semibold">Realized cash margin</p>
+                <p className="text-[10.5px] text-emerald-800 font-bold mt-1">Realized Net Cash</p>
               </CardContent>
             </Card>
           </div>
@@ -6447,32 +6544,46 @@ function MonthlyReportView({
           {reportFilter === 'all' && (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 print:grid-cols-3 print:gap-4 print:break-inside-avoid">
               <Card className="lg:col-span-2 shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider">Transaction Activity Graph</CardTitle>
-                  <CardDescription>Visualizing daily billings and spend across the month.</CardDescription>
+                <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                  <div>
+                    <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
+                      <BarChart3 className="w-4 h-4 text-blue-600" /> Transaction Activity Graph
+                    </CardTitle>
+                    <CardDescription>Visualizing daily billings, cash collections, and spend across {periodTitle}.</CardDescription>
+                  </div>
+                  <div className="hidden sm:flex items-center gap-2 text-[10px] font-bold">
+                    <span className="flex items-center gap-1 text-blue-600"><span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block"/> Billing</span>
+                    <span className="flex items-center gap-1 text-emerald-600"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"/> Cash In</span>
+                    <span className="flex items-center gap-1 text-rose-600"><span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block"/> Spend</span>
+                  </div>
                 </CardHeader>
                 <CardContent className="mt-2 h-64">
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={dailyChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                       <defs>
                         <linearGradient id="colorInv" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2}/>
-                          <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                          <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
+                          <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.05}/>
+                        </linearGradient>
+                        <linearGradient id="colorColl" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                          <stop offset="95%" stopColor="#10b981" stopOpacity={0.05}/>
                         </linearGradient>
                         <linearGradient id="colorExp" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2}/>
-                          <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
+                          <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3}/>
+                          <stop offset="95%" stopColor="#ef4444" stopOpacity={0.05}/>
                         </linearGradient>
                       </defs>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                      <XAxis dataKey="day" tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#94a3b8' }} />
-                      <YAxis tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#94a3b8' }} />
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                      <XAxis dataKey="day" tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#64748b', fontWeight: 'bold' }} />
+                      <YAxis tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#64748b', fontWeight: 'bold' }} />
                       <Tooltip 
-                        contentStyle={{ background: '#fff', borderRadius: 8, border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}
+                        contentStyle={{ background: '#fff', borderRadius: 8, border: '1px solid #cbd5e1', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
                         formatter={(val: number) => [`${currencySymbol}${val.toLocaleString()}`]}
                       />
-                      <Area type="monotone" dataKey="Invoiced" stroke="#3b82f6" strokeWidth={2.5} fillOpacity={1} fill="url(#colorInv)" name="Gross Job Billing" />
-                      <Area type="monotone" dataKey="Expenses" stroke="#ef4444" strokeWidth={2.5} fillOpacity={1} fill="url(#colorExp)" name="Operating Expenditures" />
+                      <Area isAnimationActive={false} type="monotone" dataKey="Invoiced" stroke="#2563eb" strokeWidth={2.5} fillOpacity={1} fill="url(#colorInv)" name="Gross Job Billing" />
+                      <Area isAnimationActive={false} type="monotone" dataKey="Collected" stroke="#059669" strokeWidth={2.5} fillOpacity={1} fill="url(#colorColl)" name="Payments Received" />
+                      <Area isAnimationActive={false} type="monotone" dataKey="Expenses" stroke="#dc2626" strokeWidth={2.5} fillOpacity={1} fill="url(#colorExp)" name="Operating Expenditures" />
                     </AreaChart>
                   </ResponsiveContainer>
                 </CardContent>
@@ -6481,7 +6592,9 @@ function MonthlyReportView({
               {/* Expenditure Category Weightings */}
               <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider">Costs Breakdown</CardTitle>
+                  <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
+                    <PieChart className="w-4 h-4 text-rose-500" /> Costs Breakdown
+                  </CardTitle>
                   <CardDescription>Detailed classification of expenses.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -6496,21 +6609,21 @@ function MonthlyReportView({
                         return (
                           <div key={category} className="space-y-1">
                             <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-500">
-                              <span className="capitalize">{category}</span>
-                              <span className="text-slate-800 font-bold">{currencySymbol}{amount.toLocaleString(undefined, {minimumFractionDigits:2})} ({percentage.toFixed(0)}%)</span>
+                              <span className="capitalize text-slate-700 font-bold">{category}</span>
+                              <span className="text-slate-900 font-black">{currencySymbol}{amount.toLocaleString(undefined, {minimumFractionDigits:2})} ({percentage.toFixed(0)}%)</span>
                             </div>
-                            <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                            <div className="w-full h-2.5 bg-slate-100 print:bg-slate-200 rounded-full overflow-hidden border border-slate-200/50">
                               <div 
-                                className="h-full bg-rose-500 rounded-full" 
+                                className="h-full bg-rose-500 print:bg-rose-600 rounded-full" 
                                 style={{ width: `${percentage}%` }}
                               />
                             </div>
                           </div>
                         );
                       })}
-                      <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-slate-800">
+                      <div className="pt-4 border-t border-slate-200 flex items-center justify-between text-xs font-black text-slate-900">
                         <span>Total Operating Costs:</span>
-                        <span className="text-rose-600 text-sm mt-0.5">{currencySymbol}{totalExpenses.toLocaleString(undefined, {minimumFractionDigits:2})}</span>
+                        <span className="text-rose-600 text-sm">{currencySymbol}{totalExpenses.toLocaleString(undefined, {minimumFractionDigits:2})}</span>
                       </div>
                     </div>
                   )}
@@ -6522,36 +6635,38 @@ function MonthlyReportView({
           {reportFilter === 'activities' && (
             <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider">Activities Flow Graph</CardTitle>
-                <CardDescription>All billing, collections, and expenses.</CardDescription>
+                <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4 text-blue-600" /> Activities Flow Graph
+                </CardTitle>
+                <CardDescription>All billing, collections, and expenses across {periodTitle}.</CardDescription>
               </CardHeader>
               <CardContent className="mt-2 h-64">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={dailyChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                     <defs>
                       <linearGradient id="colorInv" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2}/>
-                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.05}/>
                       </linearGradient>
                       <linearGradient id="colorColl" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
-                        <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#10b981" stopOpacity={0.05}/>
                       </linearGradient>
                       <linearGradient id="colorExp" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2}/>
-                        <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
+                        <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#ef4444" stopOpacity={0.05}/>
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="day" tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#94a3b8' }} />
-                    <YAxis tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#94a3b8' }} />
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                    <XAxis dataKey="day" tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#64748b', fontWeight: 'bold' }} />
+                    <YAxis tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#64748b', fontWeight: 'bold' }} />
                     <Tooltip 
-                      contentStyle={{ background: '#fff', borderRadius: 8, border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}
+                      contentStyle={{ background: '#fff', borderRadius: 8, border: '1px solid #cbd5e1', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
                       formatter={(val: number) => [`${currencySymbol}${val.toLocaleString()}`]}
                     />
-                    <Area type="monotone" dataKey="Invoiced" stroke="#3b82f6" strokeWidth={2} fillOpacity={1} fill="url(#colorInv)" name="Gross Job Billing" />
-                    <Area type="monotone" dataKey="Collected" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorColl)" name="Payments Received" />
-                    <Area type="monotone" dataKey="Expenses" stroke="#ef4444" strokeWidth={2} fillOpacity={1} fill="url(#colorExp)" name="Expenditures" />
+                    <Area isAnimationActive={false} type="monotone" dataKey="Invoiced" stroke="#2563eb" strokeWidth={2} fillOpacity={1} fill="url(#colorInv)" name="Gross Job Billing" />
+                    <Area isAnimationActive={false} type="monotone" dataKey="Collected" stroke="#059669" strokeWidth={2} fillOpacity={1} fill="url(#colorColl)" name="Payments Received" />
+                    <Area isAnimationActive={false} type="monotone" dataKey="Expenses" stroke="#dc2626" strokeWidth={2} fillOpacity={1} fill="url(#colorExp)" name="Expenditures" />
                   </AreaChart>
                 </ResponsiveContainer>
               </CardContent>
@@ -6561,7 +6676,9 @@ function MonthlyReportView({
           {reportFilter === 'income' && (
             <Card className="shadow-sm border-slate-200 print:shadow-none print:border-slate-300">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider">Income Performance Graph</CardTitle>
+                <CardTitle className="text-sm font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-emerald-600" /> Income Performance Graph
+                </CardTitle>
                 <CardDescription>Gross billings vs cash received.</CardDescription>
               </CardHeader>
               <CardContent className="mt-2 h-64">
@@ -6569,23 +6686,23 @@ function MonthlyReportView({
                   <AreaChart data={dailyChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                     <defs>
                       <linearGradient id="colorInv" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2}/>
-                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.05}/>
                       </linearGradient>
                       <linearGradient id="colorColl" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
-                        <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#10b981" stopOpacity={0.05}/>
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="day" tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#94a3b8' }} />
-                    <YAxis tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#94a3b8' }} />
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                    <XAxis dataKey="day" tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#64748b', fontWeight: 'bold' }} />
+                    <YAxis tickLine={false} axisLine={false} style={{ fontSize: 10, fill: '#64748b', fontWeight: 'bold' }} />
                     <Tooltip 
-                      contentStyle={{ background: '#fff', borderRadius: 8, border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}
+                      contentStyle={{ background: '#fff', borderRadius: 8, border: '1px solid #cbd5e1', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
                       formatter={(val: number) => [`${currencySymbol}${val.toLocaleString()}`]}
                     />
-                    <Area type="monotone" dataKey="Invoiced" stroke="#3b82f6" strokeWidth={2.5} fillOpacity={1} fill="url(#colorInv)" name="Gross Billings" />
-                    <Area type="monotone" dataKey="Collected" stroke="#10b981" strokeWidth={2.5} fillOpacity={1} fill="url(#colorColl)" name="Cash Collected" />
+                    <Area isAnimationActive={false} type="monotone" dataKey="Invoiced" stroke="#2563eb" strokeWidth={2.5} fillOpacity={1} fill="url(#colorInv)" name="Gross Billings" />
+                    <Area isAnimationActive={false} type="monotone" dataKey="Collected" stroke="#059669" strokeWidth={2.5} fillOpacity={1} fill="url(#colorColl)" name="Cash Collected" />
                   </AreaChart>
                 </ResponsiveContainer>
               </CardContent>
